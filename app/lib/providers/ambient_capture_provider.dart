@@ -44,6 +44,20 @@ class AmbientCaptureProvider extends ChangeNotifier {
       : service = service ?? AmbientCaptureService(),
         fallbackQueue = fallbackQueue ?? FallbackSegmentQueue();
 
+  static void applyFullCoverageDefaults() {
+    final prefs = SharedPreferencesUtil();
+    prefs.advancedAmbientCaptureEnabled = true;
+    prefs.ambientCaptureMode = 'aggressive';
+    prefs.ambientCaptureSensitivity = 'high';
+    prefs.ambientCaptureTextFallbackEnabled = true;
+    prefs.ambientCaptureLocalSttFallbackEnabled = true;
+    prefs.ambientCaptureCaptionFallbackEnabled = true;
+    prefs.ambientCaptureAccessibilityModeEnabled = true;
+    prefs.ambientCaptureRawAudioUploadEnabled = true;
+    prefs.ambientCaptureCommunicationMode = 'detect_and_caption_fallback';
+    prefs.ambientCaptureRawAudioRetention = 'until_synced';
+  }
+
   bool get isSupported => service.isSupported;
   bool get running => _running;
   bool get privateMode => _privateMode;
@@ -71,18 +85,29 @@ class AmbientCaptureProvider extends ChangeNotifier {
     _spoolDrainTimer ??= Timer.periodic(const Duration(minutes: 2), (_) => drainNativeSpool());
   }
 
-  Future<void> start() async {
-    if (!SharedPreferencesUtil().advancedAmbientCaptureEnabled || !isSupported) return;
+  Future<bool> start() async {
+    if (!SharedPreferencesUtil().advancedAmbientCaptureEnabled || !isSupported) return false;
     await initialize();
     await _captureProvider?.prepareAdvancedAmbientCapture();
     await _syncNativePolicyConfig();
     _audioSub ??= service.audioStream.listen((bytes) {
       _captureProvider?.ingestAdvancedAmbientAudio(bytes);
     });
-    _running = await service.start();
-    _privateMode = false;
-    await _updateNativeState();
+    await service.start();
+    await Future.delayed(const Duration(milliseconds: 900));
+    final status = await service.getStatus();
+    _running = status['running'] == true;
+    _privateMode = status['privateMode'] == true;
+    if (_running) {
+      await _updateNativeState();
+    } else {
+      await _audioSub?.cancel();
+      _audioSub = null;
+      await _captureProvider?.stopAdvancedAmbientCapture();
+      _health = await service.getHealthState();
+    }
     notifyListeners();
+    return _running;
   }
 
   Future<void> pause() async {

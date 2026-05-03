@@ -26,7 +26,7 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField "String", "OMI_API_BASE_URL", '"https://api.omi.me/"'
         buildConfigField "String", "OMI_AUTH_REDIRECT_URI", '"omi-ambient-companion://auth/callback"'
-        buildConfigField "String", "OMI_FIREBASE_API_KEY", '"AIzaSyCz33hNRKsSsWT_Kaxi5Q_9uB7EWGn3Dq0"'
+        buildConfigField "String", "OMI_FIREBASE_API_KEY", '"AIzaSyA88gHcmiAxjN_aE23tHRWXOgFfapyO6dk"'
     }
 
     compileOptions {

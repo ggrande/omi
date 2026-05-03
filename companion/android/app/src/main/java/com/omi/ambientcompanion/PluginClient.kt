@@ -96,7 +96,7 @@ class PluginClient(private val context: Context) {
             out
         }.toByteArray()
         if (bytes.isEmpty()) return false
-        val filename = "ambient_android_pcm16_16000_1_${meta.startedAt.toEpochMilli()}_1.bin"
+        val filename = AmbientSyncFilenames.omiPcm16Bin(meta)
         val body = JSONObject()
             .put("omi_user_id", prefs.omiUserId)
             .put("device_id", prefs.deviceId)

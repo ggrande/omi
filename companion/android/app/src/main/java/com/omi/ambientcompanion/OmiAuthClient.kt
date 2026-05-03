@@ -10,7 +10,6 @@ import java.net.URLEncoder
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.time.Instant
 import java.util.UUID
 
 class OmiAuthClient(private val context: Context) {
@@ -104,7 +103,7 @@ class OmiAuthClient(private val context: Context) {
         }
         val bytes = lengthPrefixedBytes(chunks)
         if (bytes.isEmpty()) return false
-        val filename = "ambient_android_pcm16_16000_1_${meta.startedAt.toEpochMilli()}_1.bin"
+        val filename = AmbientSyncFilenames.omiPcm16Bin(meta)
         val headers = mapOf(
             "Authorization" to "Bearer $token",
             "X-App-Platform" to "android-ambient-companion",

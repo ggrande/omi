@@ -143,19 +143,39 @@ class OmiAuthClient(private val context: Context) {
     }
 
     private fun signInWithFirebase(tokenJson: JSONObject): HttpResponse {
+        // Match the production Omi app's default auth path: use the provider
+        // OAuth credentials first. Custom tokens are useful for dev builds and
+        // alternate bundle IDs, but they must be exchanged against the exact
+        // Firebase project that minted them. If that project differs from the
+        // public mobile Firebase config, Firebase returns CREDENTIAL_MISMATCH.
+        val providerResponse = signInWithProviderCredential(tokenJson)
+        if (providerResponse.status in 200..299) return providerResponse
+
+        audit.record(
+            "omi_auth_provider_credential_failed",
+            mapOf("status" to providerResponse.status, "body" to providerResponse.body.take(200)),
+        )
+
         val customToken = tokenJson.optString("custom_token")
-        if (customToken.isNotBlank()) {
-            val body = JSONObject()
-                .put("token", customToken)
-                .put("returnSecureToken", true)
-                .toString()
-            return request(
-                method = "POST",
-                url = "${FIREBASE_SIGN_IN_CUSTOM_URL}?key=${BuildConfig.OMI_FIREBASE_API_KEY}",
-                body = body,
-                headers = mapOf("Content-Type" to "application/json"),
-            )
-        }
+        if (customToken.isNotBlank()) return signInWithCustomToken(customToken)
+
+        return providerResponse
+    }
+
+    private fun signInWithCustomToken(customToken: String): HttpResponse {
+        val body = JSONObject()
+            .put("token", customToken)
+            .put("returnSecureToken", true)
+            .toString()
+        return request(
+            method = "POST",
+            url = "${FIREBASE_SIGN_IN_CUSTOM_URL}?key=${BuildConfig.OMI_FIREBASE_API_KEY}",
+            body = body,
+            headers = mapOf("Content-Type" to "application/json"),
+        )
+    }
+
+    private fun signInWithProviderCredential(tokenJson: JSONObject): HttpResponse {
         val provider = tokenJson.optString("provider")
         val providerId = tokenJson.optString("provider_id", if (provider == "apple") "apple.com" else "google.com")
         val postBody = buildString {

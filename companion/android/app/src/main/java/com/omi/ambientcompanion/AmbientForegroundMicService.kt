@@ -342,6 +342,18 @@ class AmbientForegroundMicService : Service() {
         @Volatile private var lastState: AmbientHealthState = AmbientHealthState.IDLE_CONTEXT_WATCH
 
         fun start(context: Context, reason: String = "manual") {
+            val prefs = AppPrefs(context)
+            val userInitiated = reason.startsWith("manual") || reason == "armed_notification_start"
+            if (!prefs.micWatchConsentAccepted) {
+                ArmedStatusNotifier.show(context, "Open app to accept microphone watch consent.")
+                AuditLog(context).record("mic_start_blocked_missing_consent", mapOf("reason" to reason))
+                return
+            }
+            if (!userInitiated && !prefs.continuousMicWatchEnabled) {
+                ArmedStatusNotifier.show(context, "Context detected. Mic is idle.")
+                AuditLog(context).record("mic_auto_start_blocked", mapOf("reason" to reason))
+                return
+            }
             val intent = Intent(context, AmbientForegroundMicService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_REASON, reason)

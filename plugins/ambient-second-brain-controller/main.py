@@ -47,6 +47,14 @@ def base_url() -> str:
     return os.getenv("WEBHOOK_BASE_URL", "http://localhost:8000").rstrip("/")
 
 
+def companion_apk_url() -> str:
+    return os.getenv("COMPANION_APK_URL", "").strip()
+
+
+def omi_plugin_url() -> str:
+    return f"https://h.omi.me/apps/{os.getenv('AMBIENT_PLUGIN_ID', PLUGIN_ID)}"
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok", "plugin_id": os.getenv("AMBIENT_PLUGIN_ID", PLUGIN_ID)}
@@ -75,6 +83,12 @@ def app_home(omi_user_id: Optional[str] = Query(default=None), device_id: Option
     audit = storage.get_audit_log(user, limit=20)
     status = policy.policy_status(user, device_id)
     setup_deeplink = f"omi-ambient-companion://setup?plugin_base_url={base_url()}"
+    apk = companion_apk_url()
+    apk_step = (
+        f'<li><a href="{apk}">Download the Omi Ambient Companion APK</a>, then install it.</li>'
+        if apk
+        else "<li>Download the Omi Ambient Companion APK from the release link you were given, then install it.</li>"
+    )
     return f"""
     <html>
       <head>
@@ -87,11 +101,13 @@ def app_home(omi_user_id: Optional[str] = Query(default=None), device_id: Option
         directly to Omi first. The plugin is optional configuration, fallback text, accountability, and distribution.</p>
         <h2>Companion Setup</h2>
         <ol>
-          <li>Install the Omi Ambient Companion APK on Android.</li>
+          <li>Install Omi from the Play Store and install this plugin.</li>
+          {apk_step}
           <li>Tap <a href="{setup_deeplink}">Open companion setup</a> on the phone.</li>
           <li>Sign in with Omi in the companion app.</li>
           <li>Grant microphone, notification, accessibility, notification listener, and battery access.</li>
           <li>Use Advanced settings only if you want this plugin to receive fallback text or issue policy.</li>
+          <li>When setup is complete, tap <a href="{omi_plugin_url()}">Return to Omi</a>.</li>
         </ol>
         <p><strong>Controller URL:</strong> <code>{base_url()}</code></p>
         <h2>Device Status</h2>
@@ -136,6 +152,9 @@ def omi_app_registration_manifest():
         "app_home_url": f"{base_url()}/",
         "setup_instructions_url": f"{base_url()}/setup",
         "setup_completed_url": f"{base_url()}/setup-complete",
+        "companion_apk_url": companion_apk_url() or None,
+        "companion_setup_deeplink": f"omi-ambient-companion://setup?plugin_base_url={base_url()}",
+        "return_to_omi_url": omi_plugin_url(),
         "webhook_url": f"{base_url()}/webhooks/omi/transcript-processed",
         "chat_tools_url": f"{base_url()}/.well-known/omi-tools.json",
         "external_integration": {
@@ -151,6 +170,12 @@ def omi_app_registration_manifest():
 
 @app.get("/setup", response_class=HTMLResponse)
 def setup_page():
+    apk = companion_apk_url()
+    install_line = (
+        f'<p><a href="{apk}">Download companion APK</a></p>'
+        if apk
+        else "<p>Install the companion APK from the release link provided by the plugin owner.</p>"
+    )
     return f"""
     <html>
       <head>
@@ -161,12 +186,15 @@ def setup_page():
         <h1>Set up Omi Ambient Companion</h1>
         <p>The companion app records locally and syncs audio directly to your Omi account after Omi sign-in.</p>
         <p>This plugin is optional. Use it for fallback caption text, policy settings, accountability prompts, and logs.</p>
+        {install_line}
         <p><a href="omi-ambient-companion://setup?plugin_base_url={base_url()}">Open companion setup</a></p>
+        <p><a href="{omi_plugin_url()}">Return to Omi plugin page</a></p>
         <h2>Required phone steps</h2>
         <ol>
           <li>Install and open Omi Ambient Companion.</li>
           <li>Sign in with Omi.</li>
-          <li>Grant microphone and notification permission.</li>
+          <li>Grant notification permission for the always-visible armed status.</li>
+          <li>Accept microphone watch consent before starting mic capture. Android will show the normal mic privacy indicator whenever capture runs.</li>
           <li>Enable Accessibility and Notification Listener access for context/fallbacks.</li>
           <li>Set battery usage to unrestricted.</li>
         </ol>

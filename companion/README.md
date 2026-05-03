@@ -6,7 +6,8 @@ This is not an Omi plugin and does not modify the official Omi app. The Ambient 
 
 ## What It Does
 
-- Starts a visible microphone foreground service.
+- Shows a visible armed-status notification while idle without opening the microphone.
+- Starts a visible microphone foreground service only after explicit microphone watch consent.
 - Uses `AudioRecord` PCM16 mono 16 kHz.
 - Runs lightweight RMS/VAD first with a RAM pre-roll buffer.
 - Writes speech-triggered audio to encrypted app-private spool files.
@@ -20,7 +21,7 @@ This is not an Omi plugin and does not modify the official Omi app. The Ambient 
 - Tracks capture sessions, storage status, and local delete pending/synced/all-audio controls.
 - Runs best-effort Android on-device speech recognition over finalized spools on Android 13+ when supported by the device.
 - Supports explicit, user-approved MediaProjection audio capture for apps/audio usages Android allows.
-- Starts capture from context triggers such as meeting/call notifications, Live Transcribe/Sound Notifications, wired headset, Bluetooth audio, and SCO route changes.
+- Uses context triggers such as meeting/call notifications, Live Transcribe/Sound Notifications, wired headset, Bluetooth audio, and SCO route changes. By default these keep the app armed and idle; automatic mic start from those triggers requires explicit continuous mic watch consent.
 - Shows a structured diagnostics snapshot in the app UI for field testing.
 
 ## Build
@@ -54,8 +55,9 @@ It installs next to the official/published Omi app and does not replace or modif
 5. Enable Omi Ambient Companion in Accessibility settings.
 6. Enable Omi Ambient Companion in Notification Listener settings.
 7. Allow unrestricted/background battery operation.
-8. Tap `Start`.
-9. Speak for 30-60 seconds, tap `Stop`, then tap `Sync`.
+8. Accept microphone watch consent if you want to start mic capture.
+9. Tap `Start`.
+10. Speak for 30-60 seconds, tap `Stop`, then tap `Sync`.
 
 Optional plugin setup:
 
@@ -73,6 +75,8 @@ The app does not auto-record after reboot. Boot handling only resets stale recov
 ## Safety
 
 - Persistent notification is always visible while the mic service is running.
+- The idle armed notification is not a microphone foreground service and does not show Android's microphone privacy indicator.
+- Android's microphone privacy indicator is shown whenever `AudioRecord` capture is running. The app does not hide or suppress it.
 - Private Mode stops active capture/upload locally.
 - The app does not use `VoiceInteractionService`, SoundTrigger HAL, hidden recording, arbitrary screen scraping, or silent media sessions.
 - Call/meeting capture is degraded when Android blocks audio. Captions/transcripts are labeled as fallback sources.

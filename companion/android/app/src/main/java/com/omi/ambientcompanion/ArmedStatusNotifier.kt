@@ -48,13 +48,16 @@ object ArmedStatusNotifier {
             .setContentTitle("Omi Ambient Companion")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.presence_audio_online)
+            .setCategory(Notification.CATEGORY_STATUS)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setShowWhen(false)
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(0, "Start", action(context, ArmedStatusActionReceiver.ACTION_START, 1)).build())
-            .addAction(Notification.Action.Builder(0, "Sync", action(context, ArmedStatusActionReceiver.ACTION_SYNC, 2)).build())
-            .addAction(Notification.Action.Builder(0, "Private", action(context, ArmedStatusActionReceiver.ACTION_PRIVATE, 3)).build())
+            .addAction(Notification.Action.Builder(0, "Pause", action(context, ArmedStatusActionReceiver.ACTION_PAUSE, 2)).build())
+            .addAction(Notification.Action.Builder(0, "Resume", action(context, ArmedStatusActionReceiver.ACTION_RESUME, 3)).build())
+            .addAction(Notification.Action.Builder(0, "Stop", action(context, ArmedStatusActionReceiver.ACTION_STOP, 4)).build())
+            .addAction(Notification.Action.Builder(0, "Close", action(context, ArmedStatusActionReceiver.ACTION_CLOSE, 5)).build())
             .build()
     }
 
@@ -72,7 +75,7 @@ object ArmedStatusNotifier {
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Omi Ambient Armed",
-            NotificationManager.IMPORTANCE_LOW,
+            NotificationManager.IMPORTANCE_HIGH,
         ).apply {
             description = "Visible idle status while the companion is armed but not using the microphone."
             setShowBadge(false)

@@ -29,7 +29,7 @@ object ContextSignals {
             lastHighRiskAtMs = System.currentTimeMillis()
             lastTriggerReason = "high_risk_foreground:$packageName"
             AuditLog(context).record("high_risk_app_active", mapOf("package" to packageName))
-            AmbientForegroundMicService.start(context, "accessibility_high_risk_app")
+            maybeStartMicFromContext(context, "accessibility_high_risk_app", "Meeting/call app detected. Mic idle.")
         }
     }
 
@@ -53,7 +53,7 @@ object ContextSignals {
             )
         )
         AuditLog(context).record("fallback_segment_queued", mapOf("source" to source.name, "foreground" to foregroundPackage))
-        AmbientForegroundMicService.start(context, "caption_fallback")
+        maybeStartMicFromContext(context, "caption_fallback", "Caption fallback active. Mic idle.")
     }
 
     fun triggerFromNotification(context: Context, packageName: String?, title: String, text: String) {
@@ -69,7 +69,7 @@ object ContextSignals {
         if (trigger.shouldQueueCaption) {
             enqueueCaption(context, text.ifBlank { title }, FallbackSource.LIVE_CAPTION_NOTIFICATION)
         } else {
-            AmbientForegroundMicService.start(context, "notification_context")
+            maybeStartMicFromContext(context, "notification_context", "Relevant notification detected. Mic idle.")
         }
     }
 
@@ -77,7 +77,17 @@ object ContextSignals {
         lastRouteChangeAtMs = System.currentTimeMillis()
         lastTriggerReason = reason
         AuditLog(context).record("audio_route_trigger", mapOf("reason" to reason))
-        AmbientForegroundMicService.start(context, reason)
+        maybeStartMicFromContext(context, reason, "Audio route changed. Mic idle.")
+    }
+
+    private fun maybeStartMicFromContext(context: Context, reason: String, idleText: String) {
+        val prefs = AppPrefs(context)
+        if (prefs.continuousMicWatchEnabled && prefs.micWatchConsentAccepted) {
+            AmbientForegroundMicService.start(context, reason)
+        } else {
+            AuditLog(context).record("context_trigger_armed_only", mapOf("reason" to reason))
+            ArmedStatusNotifier.show(context, idleText)
+        }
     }
 
     fun snapshot(): JSONObject = JSONObject()

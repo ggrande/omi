@@ -183,6 +183,10 @@ class MainActivity : Activity() {
 
     private fun startFullCapture() {
         requestRuntimePermissions()
+        if (!prefs.micWatchConsentAccepted) {
+            showMicWatchConsentDialog(startAfterAccept = true)
+            return
+        }
         AmbientForegroundMicService.start(this, "manual_start")
     }
 
@@ -208,6 +212,19 @@ class MainActivity : Activity() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:$packageName")))
     }
 
+    private fun openNotificationSettings() {
+        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+        } else {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).setData(Uri.parse("package:$packageName"))
+        }
+        startActivity(intent)
+    }
+
+    private fun openOmiPluginPage() {
+        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://h.omi.me/apps/ambient_second_brain_controller")))
+    }
+
     private fun requestMediaProjection() {
         val manager = getSystemService(MediaProjectionManager::class.java)
         startActivityForResult(manager.createScreenCaptureIntent(), MEDIA_PROJECTION_REQUEST)
@@ -220,12 +237,16 @@ class MainActivity : Activity() {
             setBackgroundColor(0xff050507.toInt())
             addView(text("Enable the Android permissions that keep capture reliable. Accessibility and notification access are used for context and caption fallbacks.", 14))
             addView(text("Direct Omi sync only needs Omi sign-in and microphone permission. Accessibility, notification listener, and unrestricted battery make context triggers and fallbacks much more reliable.", 12))
+            addView(text("By default the companion is armed without using the microphone. Continuous mic watch only starts after you explicitly accept it.", 12, bold = true))
             addView(button("Sign in with Omi") { signInWithOmi() })
-            addView(button("Microphone / notifications") { requestRuntimePermissions() })
+            addView(button("Microphone permission popup") { requestRuntimePermissions() })
+            addView(button("Notification settings") { openNotificationSettings() })
             addView(button("Accessibility service") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
             addView(button("Notification listener") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) })
             addView(button("Battery unrestricted") { openBatterySettings() })
+            addView(button("Accept mic watch consent") { showMicWatchConsentDialog(startAfterAccept = false) })
             addView(button("App info") { openAppInfo() })
+            addView(button("Return to Omi") { openOmiPluginPage() })
         }
         AlertDialog.Builder(this)
             .setTitle("Permissions & setup")
@@ -255,9 +276,26 @@ class MainActivity : Activity() {
                 button("Refresh policy") { thread { PluginClient(this@MainActivity).fetchPolicy() } },
             ))
             addView(text("Capture tools", 16, bold = true))
+            addView(text("Idle notification: ${if (prefs.armedStatusNotificationEnabled) "on" else "off"}", 12))
+            addView(text("Continuous mic watch: ${if (prefs.continuousMicWatchEnabled) "on" else "off"}", 12))
             addView(row(
                 button("Screen audio") { requestMediaProjection() },
                 button("Stop screen audio") { MediaProjectionSessionService.stop(this@MainActivity) },
+            ))
+            addView(row(
+                button("Toggle idle notice") {
+                    prefs.armedStatusNotificationEnabled = !prefs.armedStatusNotificationEnabled
+                    if (prefs.armedStatusNotificationEnabled) ArmedStatusNotifier.show(this@MainActivity) else ArmedStatusNotifier.cancel(this@MainActivity)
+                    AuditLog(this@MainActivity).record("armed_notification_setting_changed", mapOf("enabled" to prefs.armedStatusNotificationEnabled))
+                },
+                button("Toggle mic watch") {
+                    if (!prefs.micWatchConsentAccepted) {
+                        showMicWatchConsentDialog(startAfterAccept = false)
+                    } else {
+                        prefs.continuousMicWatchEnabled = !prefs.continuousMicWatchEnabled
+                        AuditLog(this@MainActivity).record("continuous_mic_watch_changed", mapOf("enabled" to prefs.continuousMicWatchEnabled))
+                    }
+                },
             ))
             addView(text("Storage", 16, bold = true))
             addView(row(
@@ -346,6 +384,7 @@ class MainActivity : Activity() {
         val requiredChecks = listOf(
             "Omi user id" to prefs.omiUserId.isNotBlank(),
             "Omi auth token" to OmiAuthClient(this).isSignedIn(),
+            "Mic watch consent" to prefs.micWatchConsentAccepted,
             "Microphone permission" to hasPermission(Manifest.permission.RECORD_AUDIO),
             "Notifications permission" to (Build.VERSION.SDK_INT < 33 || hasPermission(Manifest.permission.POST_NOTIFICATIONS)),
             "Bluetooth route permission" to (Build.VERSION.SDK_INT < 31 || hasPermission(Manifest.permission.BLUETOOTH_CONNECT)),
@@ -361,6 +400,8 @@ class MainActivity : Activity() {
         preflight.text = buildString {
             appendLine("Direct Omi sync")
             append(requiredChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" })
+            appendLine()
+            appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
             appendLine()
             appendLine("Optional controller plugin")
             append(optionalChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "SKIPPED"} - $label" })
@@ -467,4 +508,26 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun showMicWatchConsentDialog(startAfterAccept: Boolean) {
+        AlertDialog.Builder(this)
+            .setTitle("Microphone watch consent")
+            .setMessage(
+                "When microphone capture is running, Android will show the normal microphone privacy indicator and a persistent Omi Ambient notification. " +
+                    "This can make it harder to notice if another app is also using the microphone, because Android may show one shared mic indicator. " +
+                    "By default, Omi Ambient stays armed with a non-mic notification and uses accessibility, notification, caption, and route context without opening the mic. " +
+                    "Accept only if you want Omi Ambient to start microphone watch when you press Start, and optionally from context triggers if continuous mic watch is enabled."
+            )
+            .setPositiveButton("Accept") { _, _ ->
+                prefs.micWatchConsentAccepted = true
+                AuditLog(this).record("mic_watch_consent_accepted")
+                if (startAfterAccept) AmbientForegroundMicService.start(this, "manual_start_after_consent")
+                refreshPreflight()
+            }
+            .setNegativeButton("Cancel") { _, _ ->
+                AuditLog(this).record("mic_watch_consent_declined")
+                refreshPreflight()
+            }
+            .show()
+    }
 }

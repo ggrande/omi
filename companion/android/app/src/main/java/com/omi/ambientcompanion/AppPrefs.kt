@@ -127,4 +127,12 @@ class AppPrefs(context: Context) {
     var armedStatusNotificationEnabled: Boolean
         get() = prefs.getBoolean("armed_status_notification_enabled", true)
         set(value) = prefs.edit().putBoolean("armed_status_notification_enabled", value).apply()
+
+    var micWatchConsentAccepted: Boolean
+        get() = prefs.getBoolean("mic_watch_consent_accepted", false)
+        set(value) = prefs.edit().putBoolean("mic_watch_consent_accepted", value).apply()
+
+    var continuousMicWatchEnabled: Boolean
+        get() = prefs.getBoolean("continuous_mic_watch_enabled", false)
+        set(value) = prefs.edit().putBoolean("continuous_mic_watch_enabled", value).apply()
 }

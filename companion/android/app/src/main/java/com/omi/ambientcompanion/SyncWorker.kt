@@ -36,11 +36,27 @@ object SyncWorker {
         var attempted = false
         var succeeded = false
         val pendingSegments = fallbackQueue.pending()
-        if (pendingSegments.isNotEmpty()) attempted = true
-        if (client.uploadFallbackSegments(pendingSegments)) {
-            fallbackQueue.clearUploaded(pendingSegments.map { it.id }.toSet())
-            if (pendingSegments.isNotEmpty()) audit.record("fallback_segments_uploaded", mapOf("count" to pendingSegments.size))
-            if (pendingSegments.isNotEmpty()) succeeded = true
+        val pluginReady = prefs.fallbackSegmentsUrl.isNotBlank() && SecureStore(context).getSecret("device_token").isNotBlank()
+        if (pendingSegments.isNotEmpty() && pluginReady) {
+            attempted = true
+            if (client.uploadFallbackSegments(pendingSegments)) {
+                fallbackQueue.clearUploaded(pendingSegments.map { it.id }.toSet())
+                audit.record("fallback_segments_uploaded", mapOf("count" to pendingSegments.size))
+                succeeded = true
+            }
+        } else if (pendingSegments.any { !it.rawAudioAvailable }) {
+            val directOmiFallbackSegments = pendingSegments
+                .filter { it.text.isNotBlank() && !it.rawAudioAvailable }
+                .sortedBy { it.start }
+                .take(500)
+            attempted = true
+            if (omiAuth.uploadFallbackSegments(directOmiFallbackSegments)) {
+                val uploadedIds = directOmiFallbackSegments.map { it.id }.toSet()
+                fallbackQueue.clearUploaded(uploadedIds)
+                succeeded = true
+            }
+        } else if (pendingSegments.isNotEmpty()) {
+            audit.record("fallback_segments_waiting_controller", mapOf("count" to pendingSegments.size))
         }
         LocalSttWorker(context).drainSpoolForLocalTranscripts()
         val spool = CaptureSpoolStore(context)

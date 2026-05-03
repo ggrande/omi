@@ -10,7 +10,9 @@ import java.net.URLEncoder
 import java.net.URL
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.time.Duration
 import java.util.UUID
+import org.json.JSONArray
 
 class OmiAuthClient(private val context: Context) {
     private val prefs = AppPrefs(context)
@@ -127,6 +129,57 @@ class OmiAuthClient(private val context: Context) {
             return false
         }
         audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "status" to v2.status, "body" to v2.body.take(200)))
+        return false
+    }
+
+    fun uploadFallbackSegments(segments: List<FallbackSegment>): Boolean {
+        val token = getFreshIdToken()
+        if (token.isBlank()) {
+            audit.record("omi_fallback_sync_skipped", mapOf("reason" to "missing_omi_auth", "count" to segments.size))
+            return false
+        }
+        val usable = segments
+            .filter { it.text.isNotBlank() && !it.rawAudioAvailable }
+            .sortedBy { it.start }
+            .take(500)
+        if (usable.isEmpty()) return false
+
+        val startedAt = usable.first().start
+        val finishedAt = usable.maxOf { it.end }
+        val arr = JSONArray()
+        usable.forEach { segment ->
+            val start = Duration.between(startedAt, segment.start).toMillis().coerceAtLeast(0).toDouble() / 1000.0
+            val rawEnd = Duration.between(startedAt, segment.end).toMillis().coerceAtLeast(0).toDouble() / 1000.0
+            val end = rawEnd.coerceAtLeast(start + 0.2)
+            arr.put(
+                JSONObject()
+                    .put("text", "[fallback:${segment.apiSource()} health:${segment.healthState.name}] ${segment.text.trim()}")
+                    .put("speaker", "SPEAKER_00")
+                    .put("speaker_id", 0)
+                    .put("is_user", false)
+                    .put("start", start)
+                    .put("end", end),
+            )
+        }
+        val body = JSONObject()
+            .put("transcript_segments", arr)
+            .put("source", "phone")
+            .put("started_at", startedAt.toString())
+            .put("finished_at", finishedAt.toString())
+            .put("language", "en")
+            .toString()
+        val response = request(
+            method = "POST",
+            url = "${BuildConfig.OMI_API_BASE_URL}v1/dev/user/conversations/from-segments",
+            body = body,
+            headers = mapOf("Authorization" to "Bearer $token", "Content-Type" to "application/json"),
+        )
+        if (response.status in 200..299) {
+            val conversationId = runCatching { JSONObject(response.body).optString("id") }.getOrDefault("")
+            audit.record("omi_fallback_segments_uploaded", mapOf("count" to usable.size, "conversation_id" to conversationId))
+            return true
+        }
+        audit.record("omi_fallback_segments_failed", mapOf("status" to response.status, "body" to response.body.take(240), "count" to usable.size))
         return false
     }
 

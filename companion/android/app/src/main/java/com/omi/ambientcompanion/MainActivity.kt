@@ -51,12 +51,19 @@ class MainActivity : Activity() {
         prefs = AppPrefs(this)
         setContentView(buildUi())
         handleOauthCallback(intent)
+        handleSetupLink(intent)
+        if (!prefs.setupIntroSeen) {
+            window.decorView.post { showSetupDialog() }
+        } else {
+            ArmedStatusNotifier.show(this)
+        }
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
         handleOauthCallback(intent)
+        handleSetupLink(intent)
     }
 
     override fun onResume() {
@@ -212,6 +219,8 @@ class MainActivity : Activity() {
             setPadding(24, 12, 24, 12)
             setBackgroundColor(0xff050507.toInt())
             addView(text("Enable the Android permissions that keep capture reliable. Accessibility and notification access are used for context and caption fallbacks.", 14))
+            addView(text("Direct Omi sync only needs Omi sign-in and microphone permission. Accessibility, notification listener, and unrestricted battery make context triggers and fallbacks much more reliable.", 12))
+            addView(button("Sign in with Omi") { signInWithOmi() })
             addView(button("Microphone / notifications") { requestRuntimePermissions() })
             addView(button("Accessibility service") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
             addView(button("Notification listener") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) })
@@ -222,6 +231,8 @@ class MainActivity : Activity() {
             .setTitle("Permissions & setup")
             .setView(ScrollView(this).apply { addView(body) })
             .setPositiveButton("Done") { _, _ ->
+                prefs.setupIntroSeen = true
+                ArmedStatusNotifier.show(this)
                 refreshPreflight()
                 refreshAudit()
             }
@@ -284,7 +295,8 @@ class MainActivity : Activity() {
     private fun refreshStorage() {
         if (::storage.isInitialized) {
             val currentSession = CaptureSessionStore(this).current()?.toString() ?: "none"
-            storage.text = "Storage: ${CaptureSpoolStore(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
+            storage.text =
+                "Storage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
         }
         refreshActivityChart()
     }
@@ -314,6 +326,18 @@ class MainActivity : Activity() {
             if (pendingHeight == 0 && syncedHeight == 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff202026.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)))
             chartRow.addView(column, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }
+    }
+
+    private fun handleSetupLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (uri.scheme != "omi-ambient-companion" || uri.host != "setup") return
+        val plugin = uri.getQueryParameter("plugin_base_url").orEmpty()
+        val user = uri.getQueryParameter("omi_user_id").orEmpty()
+        if (plugin.isNotBlank()) prefs.pluginBaseUrl = plugin
+        if (user.isNotBlank()) prefs.omiUserId = user
+        AuditLog(this).record("setup_link_opened", mapOf("plugin_configured" to plugin.isNotBlank(), "user_configured" to user.isNotBlank()))
+        refreshPreflight()
+        window.decorView.post { showSetupDialog() }
     }
 
     private fun refreshPreflight() {

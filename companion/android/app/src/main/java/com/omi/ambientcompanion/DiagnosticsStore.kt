@@ -11,6 +11,7 @@ class DiagnosticsStore(context: Context) {
 
     fun write(reason: String) {
         val spoolStats = CaptureSpoolStore(appContext).stats()
+        val fallbackStats = FallbackSegmentQueue(appContext).stats()
         val currentSession = CaptureSessionStore(appContext).current()
         val json = JSONObject()
             .put("generated_at", Instant.now().toString())
@@ -18,6 +19,7 @@ class DiagnosticsStore(context: Context) {
             .put("last_health_state", AmbientForegroundMicService.lastHealthState().name)
             .put("context", ContextSignals.snapshot())
             .put("spool", JSONObject(spoolStats))
+            .put("fallback_segments", JSONObject(fallbackStats))
             .put("current_session", currentSession)
         file.writeText(json.toString(2))
     }

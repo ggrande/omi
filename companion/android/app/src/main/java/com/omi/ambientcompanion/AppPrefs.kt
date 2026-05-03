@@ -119,4 +119,12 @@ class AppPrefs(context: Context) {
     var nextSyncAfterMs: Long
         get() = prefs.getLong("next_sync_after_ms", 0)
         set(value) = prefs.edit().putLong("next_sync_after_ms", value).apply()
+
+    var setupIntroSeen: Boolean
+        get() = prefs.getBoolean("setup_intro_seen", false)
+        set(value) = prefs.edit().putBoolean("setup_intro_seen", value).apply()
+
+    var armedStatusNotificationEnabled: Boolean
+        get() = prefs.getBoolean("armed_status_notification_enabled", true)
+        set(value) = prefs.edit().putBoolean("armed_status_notification_enabled", value).apply()
 }

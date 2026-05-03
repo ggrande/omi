@@ -14,6 +14,7 @@ This is not an Omi plugin and does not modify the official Omi app. The Ambient 
 - Uses NotificationListenerService for meeting/call/Sound Notifications/Live Transcribe context triggers.
 - Detects communication mode, mic silencing, low signal, network buffering, private mode, and storage limits.
 - Signs in with Omi and uploads decrypted length-prefixed PCM spools directly to Omi's existing `/v2/sync-local-files` audio pipeline.
+- Uploads degraded fallback-only transcript segments directly to Omi's developer conversation-from-segments endpoint when no raw audio is available and no plugin controller is configured.
 - Optionally registers with `plugins/ambient-second-brain-controller` and pins its policy key.
 - Optionally uploads telemetry, fallback segments, and backup audio spools to the controller backend.
 - Tracks capture sessions, storage status, and local delete pending/synced/all-audio controls.
@@ -81,4 +82,4 @@ The app does not auto-record after reboot. Boot handling only resets stale recov
 - Local STT uses Android's on-device recognizer when available. It is not a bundled Whisper/Vosk model and may be unavailable or limited by the system recognizer.
 - MediaProjection captures only audio Android and the source app permit. It does not bypass protected meeting/call audio.
 - Direct audio upload targets Omi `/v2/sync-local-files` using the user's Omi auth token. The uploaded filename intentionally matches the official Omi WAL shape: `audio_phone_pcm16_16000_1_fs160_<timestamp>.bin`.
-- Fallback caption/local-STT text is preserved locally and can be sent to the optional plugin. Official Omi does not currently expose the same public direct transcript-ingestion path as its audio sync path.
+- Fallback caption/local-STT text is preserved locally. When uploaded directly to Omi it is explicitly prefixed with fallback source/health labels. When the optional plugin is configured, the plugin receives structured source labels and degraded metadata.

@@ -73,6 +73,7 @@ class AmbientForegroundMicService : Service() {
     private fun startCapture(reason: String) {
         if (capturing.get()) return
         configureVadFromPrefs()
+        ArmedStatusNotifier.cancel(this)
         startForeground(NOTIFICATION_ID, buildNotification("VAD watch"))
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             updateHealth(HealthEvent(AmbientHealthState.PERMISSION_MISSING, "record_audio_missing"))
@@ -213,6 +214,7 @@ class AmbientForegroundMicService : Service() {
         pluginClient.sendTelemetry("capture_stopped", lastHealth)
         SyncWorker.drainAsync(applicationContext)
         stopForeground(STOP_FOREGROUND_REMOVE)
+        ArmedStatusNotifier.show(this)
         if (stopSelf) stopSelf()
     }
 
@@ -347,7 +349,20 @@ class AmbientForegroundMicService : Service() {
         }
 
         fun command(context: Context, action: String) {
-            context.startService(Intent(context, AmbientForegroundMicService::class.java).setAction(action))
+            if (action == ACTION_STOP || action == ACTION_PAUSE || action == ACTION_PRIVATE) {
+                if (lastState == AmbientHealthState.IDLE_CONTEXT_WATCH) {
+                    if (action == ACTION_PRIVATE) {
+                        ArmedStatusNotifier.show(context, "Private mode. Mic is idle.")
+                        AuditLog(context).record("private_mode_enabled", mapOf("source" to "idle_command"))
+                    }
+                    return
+                }
+                context.startService(Intent(context, AmbientForegroundMicService::class.java).setAction(action))
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(Intent(context, AmbientForegroundMicService::class.java).setAction(action))
+            } else {
+                context.startService(Intent(context, AmbientForegroundMicService::class.java).setAction(action))
+            }
         }
 
         fun lastHealthState(): AmbientHealthState = lastState

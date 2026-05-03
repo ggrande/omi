@@ -33,6 +33,14 @@
                     android:host="auth"
                     android:path="/callback" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="omi-ambient-companion"
+                    android:host="setup" />
+            </intent-filter>
         </activity>
 
         <service
@@ -86,5 +94,10 @@
                 <action android:name="android.media.ACTION_SCO_AUDIO_STATE_UPDATED" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name=".ArmedStatusActionReceiver"
+            android:enabled="true"
+            android:exported="false" />
     </application>
 </manifest>

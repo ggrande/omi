@@ -74,12 +74,26 @@ def app_home(omi_user_id: Optional[str] = Query(default=None), device_id: Option
     settings = storage.get_settings(user)
     audit = storage.get_audit_log(user, limit=20)
     status = policy.policy_status(user, device_id)
+    setup_deeplink = f"omi-ambient-companion://setup?plugin_base_url={base_url()}"
     return f"""
     <html>
-      <head><title>Ambient Second Brain Controller</title></head>
-      <body style="font-family: system-ui; max-width: 920px; margin: 32px auto; line-height: 1.45">
+      <head>
+        <title>Ambient Second Brain Controller</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </head>
+      <body style="font-family: system-ui; max-width: 920px; margin: 32px auto; line-height: 1.45; padding: 0 18px">
         <h1>Ambient Second Brain Controller</h1>
-        <p>This plugin never records audio. It only issues signed, short-lived capture policies.</p>
+        <p>This plugin never records audio. The companion app records locally, signs in with Omi, and syncs audio
+        directly to Omi first. The plugin is optional configuration, fallback text, accountability, and distribution.</p>
+        <h2>Companion Setup</h2>
+        <ol>
+          <li>Install the Omi Ambient Companion APK on Android.</li>
+          <li>Tap <a href="{setup_deeplink}">Open companion setup</a> on the phone.</li>
+          <li>Sign in with Omi in the companion app.</li>
+          <li>Grant microphone, notification, accessibility, notification listener, and battery access.</li>
+          <li>Use Advanced settings only if you want this plugin to receive fallback text or issue policy.</li>
+        </ol>
+        <p><strong>Controller URL:</strong> <code>{base_url()}</code></p>
         <h2>Device Status</h2>
         <pre>{status}</pre>
         <h2>Current Settings</h2>
@@ -120,6 +134,8 @@ def omi_app_registration_manifest():
         "description": "Issues signed ambient capture policies and extracts tasks, reminders, commitments, and accountability prompts from Omi conversations.",
         "capabilities": ["ambient_capture_controller", "chat_tools", "external_integration"],
         "app_home_url": f"{base_url()}/",
+        "setup_instructions_url": f"{base_url()}/setup",
+        "setup_completed_url": f"{base_url()}/setup-complete",
         "webhook_url": f"{base_url()}/webhooks/omi/transcript-processed",
         "chat_tools_url": f"{base_url()}/.well-known/omi-tools.json",
         "external_integration": {
@@ -131,6 +147,37 @@ def omi_app_registration_manifest():
             "capture_controller_scopes": ["ambient_capture_controller"],
         },
     }
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page():
+    return f"""
+    <html>
+      <head>
+        <title>Set up Ambient Second Brain Controller</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+      </head>
+      <body style="font-family: system-ui; max-width: 760px; margin: 32px auto; line-height: 1.5; padding: 0 18px">
+        <h1>Set up Omi Ambient Companion</h1>
+        <p>The companion app records locally and syncs audio directly to your Omi account after Omi sign-in.</p>
+        <p>This plugin is optional. Use it for fallback caption text, policy settings, accountability prompts, and logs.</p>
+        <p><a href="omi-ambient-companion://setup?plugin_base_url={base_url()}">Open companion setup</a></p>
+        <h2>Required phone steps</h2>
+        <ol>
+          <li>Install and open Omi Ambient Companion.</li>
+          <li>Sign in with Omi.</li>
+          <li>Grant microphone and notification permission.</li>
+          <li>Enable Accessibility and Notification Listener access for context/fallbacks.</li>
+          <li>Set battery usage to unrestricted.</li>
+        </ol>
+      </body>
+    </html>
+    """
+
+
+@app.get("/setup-complete")
+def setup_complete():
+    return {"status": "ok", "message": "Open Omi Ambient Companion to finish local phone permissions."}
 
 
 @app.get("/.well-known/omi-tools.json")

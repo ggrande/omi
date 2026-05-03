@@ -27,6 +27,15 @@ class FallbackSegmentQueue(context: Context) {
     }
 
     @Synchronized
+    fun stats(): Map<String, Any> {
+        val pending = pending()
+        return mapOf(
+            "pending_count" to pending.size,
+            "sources" to pending.groupingBy { it.apiSource() }.eachCount(),
+        )
+    }
+
+    @Synchronized
     fun clearUploaded(uploadedIds: Set<String>) {
         if (!file.exists()) return
         val kept = file.readLines().mapNotNull { line ->

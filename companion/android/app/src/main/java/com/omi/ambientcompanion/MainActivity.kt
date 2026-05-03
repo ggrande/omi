@@ -2,6 +2,7 @@ package com.omi.ambientcompanion
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.ClipboardManager
@@ -34,9 +35,8 @@ class MainActivity : Activity() {
     private lateinit var storage: TextView
     private lateinit var diagnostics: TextView
     private lateinit var preflight: TextView
-    private lateinit var pluginUrl: EditText
-    private lateinit var userId: EditText
     private lateinit var omiAuthStatus: TextView
+    private lateinit var chartRow: LinearLayout
 
     private val healthReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -82,64 +82,43 @@ class MainActivity : Activity() {
             setBackgroundColor(0xff050507.toInt())
         }
         root.addView(text("Omi Ambient Companion", 26, bold = true))
-        root.addView(text("Visible ambient capture with VAD, local spool, caption fallback, and Omi plugin sync.", 14))
+        root.addView(text("Direct Omi audio sync with local capture, VAD, captions, and optional plugin control.", 14))
 
-        pluginUrl = field("Plugin base URL", prefs.pluginBaseUrl)
-        userId = field("Omi user id", prefs.omiUserId)
-        root.addView(pluginUrl)
-        root.addView(userId)
+        status = text("Status: ${AmbientForegroundMicService.lastHealthState().name}", 16, bold = true)
+        root.addView(status)
+        omiAuthStatus = text(omiAuthLabel(), 12, bold = true)
+        root.addView(omiAuthStatus)
         root.addView(row(
             button("Sign in with Omi") { signInWithOmi() },
             button("Sign out Omi") { signOutOmi() },
         ))
-        omiAuthStatus = text(omiAuthLabel(), 12, bold = true)
-        root.addView(omiAuthStatus)
         root.addView(row(
-            button("Register") { registerDevice() },
+            button("Start") { startFullCapture() },
             button("Sync") { SyncWorker.drainAsync(this) },
         ))
         root.addView(row(
-            button("Start") { startFullCapture() },
             button("Pause") { AmbientForegroundMicService.command(this, AmbientForegroundMicService.ACTION_PAUSE) },
             button("Stop") { AmbientForegroundMicService.command(this, AmbientForegroundMicService.ACTION_STOP) },
             button("Private") { AmbientForegroundMicService.command(this, AmbientForegroundMicService.ACTION_PRIVATE) },
         ))
-        root.addView(row(
-            button("Screen Audio") { requestMediaProjection() },
-            button("Stop Screen Audio") { MediaProjectionSessionService.stop(this) },
-        ))
-        root.addView(row(
-            button("Permissions") { requestRuntimePermissions() },
-            button("Accessibility") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
-            button("Notifications") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) },
-        ))
-        root.addView(row(
-            button("Battery") { openBatterySettings() },
-            button("App Info") { openAppInfo() },
-        ))
-        root.addView(row(
-            button("Refresh Preflight") { refreshPreflight() },
-            button("Refresh Diagnostics") { refreshDiagnostics() },
-            button("Share Diagnostics") { shareDiagnostics() },
-        ))
-        root.addView(row(
-            button("Delete Synced") { deleteSpool("synced") },
-            button("Delete Pending") { deleteSpool("pending") },
-            button("Delete All Audio") { deleteSpool(null) },
-        ))
-        status = text("Status: ${AmbientForegroundMicService.lastHealthState().name}", 16, bold = true)
-        root.addView(status)
+        root.addView(button("Permissions & setup") { showSetupDialog() })
+        root.addView(button("Advanced settings") { showAdvancedDialog() })
+        root.addView(text("Last 15 minutes", 18, bold = true))
+        chartRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.BOTTOM
+            setPadding(0, 6, 0, 6)
+        }
+        root.addView(chartRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(58)))
         preflight = text("", 12)
         root.addView(text("Preflight", 18, bold = true))
         root.addView(preflight)
         storage = text("", 12)
         root.addView(storage)
         audit = text("", 12)
-        diagnostics = text("", 12)
-        root.addView(text("Diagnostics", 18, bold = true))
-        root.addView(diagnostics)
-        root.addView(text("Audit log", 18, bold = true))
+        root.addView(text("Recent log", 18, bold = true))
         root.addView(audit)
+        diagnostics = text("", 12)
         refreshPreflight()
         refreshStorage()
         refreshDiagnostics()
@@ -154,9 +133,9 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun registerDevice() {
-        prefs.pluginBaseUrl = pluginUrl.text.toString()
-        prefs.omiUserId = userId.text.toString()
+    private fun registerDevice(pluginBaseUrl: String, omiUserId: String) {
+        prefs.pluginBaseUrl = pluginBaseUrl
+        prefs.omiUserId = omiUserId
         thread {
             val ok = PluginClient(this).registerDevice(prefs.pluginBaseUrl, prefs.omiUserId)
             runOnUiThread {
@@ -178,7 +157,6 @@ class MainActivity : Activity() {
 
     private fun signOutOmi() {
         OmiAuthClient(this).signOut()
-        userId.setText(prefs.omiUserId)
         refreshPreflight()
         refreshAudit()
     }
@@ -189,7 +167,6 @@ class MainActivity : Activity() {
         thread {
             val ok = OmiAuthClient(this).handleCallback(uri)
             runOnUiThread {
-                userId.setText(prefs.omiUserId)
                 status.text = if (ok) "Signed in to Omi: ${prefs.omiAuthUid}" else "Omi sign-in failed"
                 refreshPreflight()
                 refreshAudit()
@@ -229,8 +206,78 @@ class MainActivity : Activity() {
         startActivityForResult(manager.createScreenCaptureIntent(), MEDIA_PROJECTION_REQUEST)
     }
 
+    private fun showSetupDialog() {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 12)
+            setBackgroundColor(0xff050507.toInt())
+            addView(text("Enable the Android permissions that keep capture reliable. Accessibility and notification access are used for context and caption fallbacks.", 14))
+            addView(button("Microphone / notifications") { requestRuntimePermissions() })
+            addView(button("Accessibility service") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
+            addView(button("Notification listener") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) })
+            addView(button("Battery unrestricted") { openBatterySettings() })
+            addView(button("App info") { openAppInfo() })
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Permissions & setup")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Done") { _, _ ->
+                refreshPreflight()
+                refreshAudit()
+            }
+            .show()
+    }
+
+    private fun showAdvancedDialog() {
+        val pluginField = field("Plugin base URL", prefs.pluginBaseUrl)
+        val userField = field("Omi user id", prefs.omiUserId)
+        val diagnosticText = text(DiagnosticsStore(this).read(), 12)
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 12)
+            setBackgroundColor(0xff050507.toInt())
+            addView(text("Optional controller plugin", 16, bold = true))
+            addView(pluginField)
+            addView(userField)
+            addView(row(
+                button("Register plugin") { registerDevice(pluginField.text.toString(), userField.text.toString()) },
+                button("Refresh policy") { thread { PluginClient(this@MainActivity).fetchPolicy() } },
+            ))
+            addView(text("Capture tools", 16, bold = true))
+            addView(row(
+                button("Screen audio") { requestMediaProjection() },
+                button("Stop screen audio") { MediaProjectionSessionService.stop(this@MainActivity) },
+            ))
+            addView(text("Storage", 16, bold = true))
+            addView(row(
+                button("Delete synced") { deleteSpool("synced") },
+                button("Delete pending") { deleteSpool("pending") },
+                button("Delete all") { deleteSpool(null) },
+            ))
+            addView(text("Diagnostics", 16, bold = true))
+            addView(row(
+                button("Refresh") {
+                    refreshPreflight()
+                    refreshDiagnostics()
+                    refreshAudit()
+                    diagnosticText.text = DiagnosticsStore(this@MainActivity).read()
+                },
+                button("Share") { shareDiagnostics() },
+            ))
+            addView(diagnosticText)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Advanced settings")
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Done") { _, _ ->
+                refreshPreflight()
+                refreshAudit()
+            }
+            .show()
+    }
+
     private fun refreshAudit() {
-        audit.text = AuditLog(this).tail(40).joinToString("\n")
+        if (::audit.isInitialized) audit.text = AuditLog(this).tail(10).joinToString("\n")
         refreshStorage()
     }
 
@@ -239,17 +286,42 @@ class MainActivity : Activity() {
             val currentSession = CaptureSessionStore(this).current()?.toString() ?: "none"
             storage.text = "Storage: ${CaptureSpoolStore(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
         }
+        refreshActivityChart()
+    }
+
+    private fun refreshActivityChart() {
+        if (!::chartRow.isInitialized) return
+        val nowMinute = System.currentTimeMillis() / 60_000L
+        val buckets = (14 downTo 0).map { minuteOffset ->
+            val minute = nowMinute - minuteOffset
+            val items = CaptureSpoolStore(this).list().filter { it.startedAt.toEpochMilli() / 60_000L == minute }
+            Pair(items.count { it.status == "pending" }, items.count { it.status == "synced" })
+        }
+        val maxCount = buckets.maxOfOrNull { it.first + it.second }?.coerceAtLeast(1) ?: 1
+        chartRow.removeAllViews()
+        buckets.forEach { (pending, synced) ->
+            val column = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.BOTTOM
+                setPadding(2, 0, 2, 0)
+            }
+            val syncedHeight = dp(44 * synced / maxCount).coerceAtLeast(if (synced > 0) dp(4) else 0)
+            val pendingHeight = dp(44 * pending / maxCount).coerceAtLeast(if (pending > 0) dp(4) else 0)
+            val spacerHeight = (dp(48) - syncedHeight - pendingHeight).coerceAtLeast(0)
+            column.addView(View(this@MainActivity), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, spacerHeight))
+            if (syncedHeight > 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff2ecc71.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, syncedHeight))
+            if (pendingHeight > 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff666666.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, pendingHeight))
+            if (pendingHeight == 0 && syncedHeight == 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff202026.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)))
+            chartRow.addView(column, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        }
     }
 
     private fun refreshPreflight() {
         if (!::preflight.isInitialized) return
         val secure = SecureStore(this)
-        val checks = listOf(
-            "Plugin URL" to prefs.pluginBaseUrl.isNotBlank(),
+        val requiredChecks = listOf(
             "Omi user id" to prefs.omiUserId.isNotBlank(),
             "Omi auth token" to OmiAuthClient(this).isSignedIn(),
-            "Device token" to secure.getSecret("device_token").isNotBlank(),
-            "Pinned key" to (prefs.controllerKeyId.isNotBlank() && prefs.controllerPublicKey.isNotBlank()),
             "Microphone permission" to hasPermission(Manifest.permission.RECORD_AUDIO),
             "Notifications permission" to (Build.VERSION.SDK_INT < 33 || hasPermission(Manifest.permission.POST_NOTIFICATIONS)),
             "Bluetooth route permission" to (Build.VERSION.SDK_INT < 31 || hasPermission(Manifest.permission.BLUETOOTH_CONNECT)),
@@ -257,7 +329,18 @@ class MainActivity : Activity() {
             "Notification listener enabled" to isNotificationListenerEnabled(),
             "Battery unrestricted/exempt" to isBatteryExempt(),
         )
-        preflight.text = checks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" }
+        val optionalChecks = listOf(
+            "Plugin URL" to prefs.pluginBaseUrl.isNotBlank(),
+            "Plugin device token" to secure.getSecret("device_token").isNotBlank(),
+            "Plugin pinned key" to (prefs.controllerKeyId.isNotBlank() && prefs.controllerPublicKey.isNotBlank()),
+        )
+        preflight.text = buildString {
+            appendLine("Direct Omi sync")
+            append(requiredChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" })
+            appendLine()
+            appendLine("Optional controller plugin")
+            append(optionalChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "SKIPPED"} - $label" })
+        }
         if (::omiAuthStatus.isInitialized) omiAuthStatus.text = omiAuthLabel()
     }
 
@@ -341,6 +424,8 @@ class MainActivity : Activity() {
     private fun button(label: String, action: () -> Unit): Button {
         return Button(this).apply {
             text = label
+            setTextColor(0xffffffff.toInt())
+            setBackgroundColor(0xff5f5f64.toInt())
             setOnClickListener { action() }
         }
     }
@@ -356,4 +441,6 @@ class MainActivity : Activity() {
     companion object {
         private const val MEDIA_PROJECTION_REQUEST = 7304
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 }

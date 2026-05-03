@@ -219,6 +219,30 @@ def test_audio_spool_storage_and_dedupe(client):
     assert second.json()["inserted"] is False
 
 
+def test_audio_spool_accepts_official_omi_phone_pcm_filename(client):
+    registration = register(client)
+    pcm = b"\x01\x00" * 320
+    audio = struct.pack("<I", len(pcm)) + pcm
+    payload = {
+        "omi_user_id": "user-1",
+        "device_id": "device-1",
+        "session_id": "session-audio-2",
+        "filename": "audio_phone_pcm16_16000_1_fs160_1715000000.bin",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "duration_estimate": 0.04,
+        "sample_rate": 16000,
+        "channels": 1,
+        "codec": "pcm16",
+        "format": "length_prefixed_pcm",
+        "audio_base64": base64.b64encode(audio).decode("ascii"),
+    }
+
+    response = client.post("/capture/audio-spool", headers=policy_headers(registration["device_token"]), json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
 def test_task_extraction_confidence_levels():
     high = task_extraction.extract_tasks_from_text("Remind me to send the proposal tomorrow.")
     medium = task_extraction.extract_tasks_from_text("We should check in with Sam.")

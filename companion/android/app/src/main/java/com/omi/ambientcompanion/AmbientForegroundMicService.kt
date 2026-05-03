@@ -217,6 +217,10 @@ class AmbientForegroundMicService : Service() {
     }
 
     private fun startPolicyLoop() {
+        if (prefs.policyUrl.isBlank() || SecureStore(this).getSecret("device_token").isBlank()) {
+            audit.record("policy_loop_skipped", mapOf("reason" to "controller_not_configured"))
+            return
+        }
         policyLoop?.let { mainHandler.removeCallbacks(it) }
         policyLoop = Runnable {
             val result = pluginClient.fetchPolicy()
@@ -304,6 +308,9 @@ class AmbientForegroundMicService : Service() {
             .setContentText(status)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setShowWhen(true)
+            .setUsesChronometer(capturing.get())
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(0, "Pause", serviceIntent(ACTION_PAUSE, 1)).build())
             .addAction(Notification.Action.Builder(0, "Resume", serviceIntent(ACTION_RESUME, 2)).build())

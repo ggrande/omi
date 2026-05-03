@@ -14,7 +14,9 @@ from models import AudioSpoolUploadRequest, PLUGIN_ID
 
 AUDIO_DIR = Path(__file__).with_name("audio_spool_uploads")
 MAX_AUDIO_BYTES = 200 * 1024 * 1024
-FILENAME_RE = re.compile(r"^ambient_android_pcm16_16000_1_[0-9]{10,17}_[0-9]+\.bin$")
+FILENAME_RE = re.compile(
+    r"^(?:ambient_android_pcm16_16000_1_[0-9]{10,17}_[0-9]+|audio_phone_pcm16_16000_1_fs160_[0-9]{10})\.bin$"
+)
 
 
 def ingest_audio_spool(

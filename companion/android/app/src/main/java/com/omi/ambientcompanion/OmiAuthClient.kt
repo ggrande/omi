@@ -108,7 +108,11 @@ class OmiAuthClient(private val context: Context) {
             "Authorization" to "Bearer $token",
             "X-App-Platform" to "android-ambient-companion",
         )
-        val v2 = requestMultipart("${BuildConfig.OMI_API_BASE_URL}v2/sync-local-files", filename, bytes, headers)
+        val v2Url = "${BuildConfig.OMI_API_BASE_URL}v2/sync-local-files"
+        val v2 = requestMultipart(v2Url, filename, bytes, headers)
+        if (v2.status == 202) {
+            return pollSyncJob(v2Url, v2.body, headers, meta)
+        }
         if (v2.status in 200..299) {
             audit.record("omi_audio_sync_uploaded", mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "status" to v2.status))
             return true
@@ -123,6 +127,54 @@ class OmiAuthClient(private val context: Context) {
             return false
         }
         audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "status" to v2.status, "body" to v2.body.take(200)))
+        return false
+    }
+
+    private fun pollSyncJob(baseUrl: String, body: String, headers: Map<String, String>, meta: SpoolMetadata): Boolean {
+        val start = runCatching { JSONObject(body) }.getOrNull()
+        val jobId = start?.optString("job_id").orEmpty()
+        if (jobId.isBlank()) {
+            audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "status" to 202, "body" to body.take(200)))
+            return false
+        }
+        var pollAfterMs = start?.optLong("poll_after_ms", 3000L)?.coerceIn(1000L, 10_000L) ?: 3000L
+        audit.record("omi_audio_sync_job_started", mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId))
+        repeat(MAX_SYNC_JOB_POLLS) {
+            Thread.sleep(pollAfterMs)
+            val poll = request("GET", "$baseUrl/$jobId", null, headers)
+            if (poll.status !in 200..299) {
+                audit.record(
+                    "omi_audio_sync_poll_failed",
+                    mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId, "status" to poll.status),
+                )
+                return@repeat
+            }
+            val json = runCatching { JSONObject(poll.body) }.getOrNull() ?: return@repeat
+            val status = json.optString("status")
+            if (status == "completed" || status == "partial_failure") {
+                audit.record(
+                    "omi_audio_sync_uploaded",
+                    mapOf(
+                        "endpoint" to "v2",
+                        "session_id" to meta.sessionId,
+                        "job_id" to jobId,
+                        "status" to status,
+                        "successful_segments" to json.optInt("successful_segments", 0),
+                        "failed_segments" to json.optInt("failed_segments", 0),
+                    ),
+                )
+                return true
+            }
+            if (status == "failed") {
+                audit.record(
+                    "omi_audio_sync_failed",
+                    mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId, "status" to status, "body" to poll.body.take(200)),
+                )
+                return false
+            }
+            pollAfterMs = 3000L
+        }
+        audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId, "reason" to "poll_timeout"))
         return false
     }
 
@@ -274,5 +326,6 @@ class OmiAuthClient(private val context: Context) {
         private const val FIREBASE_SIGN_IN_CUSTOM_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken"
         private const val FIREBASE_SIGN_IN_IDP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
         private const val FIREBASE_REFRESH_URL = "https://securetoken.googleapis.com/v1/token"
+        private const val MAX_SYNC_JOB_POLLS = 80
     }
 }

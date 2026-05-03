@@ -60,6 +60,7 @@ PY
 - `GET /capture/policy/current`
 - `POST /capture/telemetry`
 - `POST /capture/fallback-segments`
+- `POST /capture/audio-spool`
 - `POST /webhooks/omi/memory-created`
 - `POST /webhooks/omi/transcript-processed`
 - `POST /webhooks/omi/audio-bytes`
@@ -74,6 +75,7 @@ PY
 - policy URL
 - telemetry URL
 - fallback segments URL
+- audio spool URL
 - plugin public key
 - key id
 - key fingerprint
@@ -121,6 +123,7 @@ Covered:
 - revoked device policy denial
 - telemetry storage and unsafe field rejection
 - fallback segment storage and dedupe
+- audio spool storage and dedupe
 - task extraction confidence levels
 - chat tools manifest schema
 - health, readiness, and controller registration manifests

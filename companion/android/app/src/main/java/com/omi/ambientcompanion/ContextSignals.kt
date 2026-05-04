@@ -61,6 +61,10 @@ object ContextSignals {
     }
 
     fun triggerFromNotification(context: Context, packageName: String?, title: String, text: String, subText: String, bigText: String) {
+        if (packageName == context.packageName) {
+            AuditLog(context).record("notification_self_ignored", mapOf("title" to title.take(80)))
+            return
+        }
         val trigger = NotificationClassifier.classify(packageName, title, text, subText, bigText)
         if (!trigger.shouldStartCapture) return
         lastNotificationAtMs = System.currentTimeMillis()

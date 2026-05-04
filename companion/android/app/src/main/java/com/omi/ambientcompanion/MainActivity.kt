@@ -36,6 +36,7 @@ class MainActivity : Activity() {
     private lateinit var diagnostics: TextView
     private lateinit var preflight: TextView
     private lateinit var omiAuthStatus: TextView
+    private lateinit var signal: TextView
     private lateinit var chartRow: LinearLayout
 
     private val healthReceiver = object : BroadcastReceiver() {
@@ -103,6 +104,8 @@ class MainActivity : Activity() {
 
         status = text("Status: ${AmbientForegroundMicService.lastHealthState().name}", 16, bold = true)
         root.addView(status)
+        signal = text(AudioSignalStore.label(), 14, bold = true)
+        root.addView(signal)
         omiAuthStatus = text(omiAuthLabel(), 12, bold = true)
         root.addView(omiAuthStatus)
         root.addView(row(
@@ -320,12 +323,23 @@ class MainActivity : Activity() {
                     prefs.sampledVadEnabled = !prefs.sampledVadEnabled
                     AuditLog(this@MainActivity).record("sampled_vad_changed", mapOf("enabled" to prefs.sampledVadEnabled))
                 },
+                button("Max reliability") {
+                    prefs.continuousMicWatchEnabled = true
+                    prefs.sampledVadEnabled = false
+                    prefs.sampledVadIntervalMs = 10_000L
+                    prefs.sampledVadWindowMs = 2_000L
+                    AuditLog(this@MainActivity).record("capture_profile_set", mapOf("profile" to "max_reliability"))
+                },
+            ))
+            addView(row(
                 button("Faster checks") {
+                    prefs.sampledVadEnabled = true
                     prefs.sampledVadIntervalMs = 10_000L
                     prefs.sampledVadWindowMs = 2_000L
                     AuditLog(this@MainActivity).record("sampled_vad_profile_changed", mapOf("profile" to "faster"))
                 },
                 button("Battery checks") {
+                    prefs.sampledVadEnabled = true
                     prefs.sampledVadIntervalMs = 30_000L
                     prefs.sampledVadWindowMs = 1_000L
                     AuditLog(this@MainActivity).record("sampled_vad_profile_changed", mapOf("profile" to "battery"))
@@ -371,6 +385,7 @@ class MainActivity : Activity() {
             storage.text =
                 "Sync: ${prefs.lastSyncLabel}\nStorage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
         }
+        if (::signal.isInitialized) signal.text = AudioSignalStore.label()
         refreshActivityChart()
     }
 
@@ -438,6 +453,7 @@ class MainActivity : Activity() {
             appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
             appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
             appendLine("Sync: ${prefs.lastSyncLabel}")
+            appendLine(AudioSignalStore.label())
             appendLine("Companion mode: ${CompanionDeviceSupport.associationCount(this@MainActivity)} associated device(s)")
             appendLine()
             appendLine("Optional controller plugin")
@@ -574,7 +590,10 @@ class MainActivity : Activity() {
             )
             .setPositiveButton("Accept") { _, _ ->
                 prefs.micWatchConsentAccepted = true
+                prefs.continuousMicWatchEnabled = true
+                prefs.sampledVadEnabled = false
                 AuditLog(this).record("mic_watch_consent_accepted")
+                AuditLog(this).record("capture_profile_set", mapOf("profile" to "max_reliability"))
                 if (startAfterAccept) AmbientForegroundMicService.start(this, "manual_start_after_consent")
                 refreshPreflight()
             }

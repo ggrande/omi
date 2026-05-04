@@ -158,6 +158,13 @@ class AmbientForegroundMicService : Service() {
 
     private fun handleAudioChunk(chunk: ByteArray) {
         val result = vad.accept(chunk)
+        val signalEvents = AudioSignalStore.update(result, vad.activeSpeech, speechSessionActive)
+        signalEvents.forEach { event ->
+            audit.record(event, mapOf("dbfs" to result.dbfs, "zero_ratio" to result.zeroRatio))
+            if (event == "sound_detected" || event == "conversation_detected") {
+                updateNotification(if (event == "conversation_detected") "Conversation detected" else "Sound detected")
+            }
+        }
         communicationMonitor.evaluate()
         if (!speechSessionActive && vad.activeSpeech) {
             speechSessionActive = true

@@ -135,4 +135,8 @@ class AppPrefs(context: Context) {
     var continuousMicWatchEnabled: Boolean
         get() = prefs.getBoolean("continuous_mic_watch_enabled", false)
         set(value) = prefs.edit().putBoolean("continuous_mic_watch_enabled", value).apply()
+
+    var appInForeground: Boolean
+        get() = prefs.getBoolean("app_in_foreground", false)
+        set(value) = prefs.edit().putBoolean("app_in_foreground", value).apply()
 }

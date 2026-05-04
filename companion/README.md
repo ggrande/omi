@@ -13,6 +13,7 @@ This is not an Omi plugin and does not modify the official Omi app. The Ambient 
 - Writes speech-triggered audio to encrypted app-private spool files.
 - Uses AccessibilityService for foreground app and allowlisted caption/transcript fallback.
 - Uses NotificationListenerService for meeting/call/Sound Notifications/Live Transcribe context triggers.
+- Can associate with a real Bluetooth companion device through Android's Companion Device Manager for better background compatibility when an actual companion device is present.
 - Detects communication mode, mic silencing, low signal, network buffering, private mode, and storage limits.
 - Signs in with Omi and uploads decrypted length-prefixed PCM spools directly to Omi's existing `/v2/sync-local-files` audio pipeline.
 - Uploads degraded fallback-only transcript segments directly to Omi's developer conversation-from-segments endpoint when no raw audio is available and no plugin controller is configured.
@@ -55,9 +56,10 @@ It installs next to the official/published Omi app and does not replace or modif
 5. Enable Omi Ambient Companion in Accessibility settings.
 6. Enable Omi Ambient Companion in Notification Listener settings.
 7. Allow unrestricted/background battery operation.
-8. Accept microphone watch consent if you want to start mic capture.
-9. Tap `Start`.
-10. Speak for 30-60 seconds, tap `Stop`, then tap `Sync`.
+8. Optionally pair a real companion device from `Permissions & setup`.
+9. Accept microphone watch consent if you want to start mic capture.
+10. Tap `Start`.
+11. Speak for 30-60 seconds, tap `Stop`, then tap `Sync`.
 
 Optional plugin setup:
 
@@ -79,6 +81,7 @@ The app does not auto-record after reboot. Boot handling only resets stale recov
 - Android's microphone privacy indicator is shown whenever `AudioRecord` capture is running. The app does not hide or suppress it.
 - Private Mode stops active capture/upload locally.
 - The app does not use `VoiceInteractionService`, SoundTrigger HAL, hidden recording, arbitrary screen scraping, or silent media sessions.
+- Companion Device Manager support requires a real user-approved device association; the app does not fake companion status.
 - Call/meeting capture is degraded when Android blocks audio. Captions/transcripts are labeled as fallback sources.
 
 ## Known Limits

@@ -344,6 +344,7 @@ class AmbientForegroundMicService : Service() {
         fun start(context: Context, reason: String = "manual") {
             val prefs = AppPrefs(context)
             val userInitiated = reason.startsWith("manual") || reason == "armed_notification_start"
+            val companionAssociated = CompanionDeviceSupport.associationCount(context) > 0
             if (!prefs.micWatchConsentAccepted) {
                 ArmedStatusNotifier.show(context, "Open app to accept microphone watch consent.")
                 AuditLog(context).record("mic_start_blocked_missing_consent", mapOf("reason" to reason))
@@ -354,10 +355,23 @@ class AmbientForegroundMicService : Service() {
                 AuditLog(context).record("mic_auto_start_blocked", mapOf("reason" to reason))
                 return
             }
+            if (!userInitiated && !prefs.appInForeground && !companionAssociated) {
+                ArmedStatusNotifier.show(context, "Context detected. Open app or start from notification to use mic.")
+                AuditLog(context).record("mic_auto_start_blocked_background", mapOf("reason" to reason))
+                return
+            }
             val intent = Intent(context, AmbientForegroundMicService::class.java)
                 .setAction(ACTION_START)
                 .putExtra(EXTRA_REASON, reason)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            }.onFailure {
+                ArmedStatusNotifier.show(context, "Mic start blocked by Android. Open app and press Start.")
+                AuditLog(context).record(
+                    "mic_start_failed",
+                    mapOf("reason" to reason, "error" to it.javaClass.simpleName, "companion_associated" to companionAssociated),
+                )
+            }
         }
 
         fun command(context: Context, action: String) {

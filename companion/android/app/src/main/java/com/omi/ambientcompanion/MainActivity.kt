@@ -66,6 +66,16 @@ class MainActivity : Activity() {
         handleSetupLink(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        prefs.appInForeground = true
+    }
+
+    override fun onStop() {
+        prefs.appInForeground = false
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         if (Build.VERSION.SDK_INT >= 33) {
@@ -137,6 +147,10 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == MEDIA_PROJECTION_REQUEST && resultCode == RESULT_OK && data != null) {
             MediaProjectionSessionService.start(this, resultCode, data)
+        } else if (requestCode == CompanionDeviceSupport.REQUEST_ASSOCIATE) {
+            CompanionDeviceSupport.onAssociationResult(this, resultCode)
+            refreshPreflight()
+            refreshAudit()
         }
     }
 
@@ -244,6 +258,7 @@ class MainActivity : Activity() {
             addView(button("Accessibility service") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
             addView(button("Notification listener") { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) })
             addView(button("Battery unrestricted") { openBatterySettings() })
+            addView(button("Pair companion device") { CompanionDeviceSupport.requestAssociation(this@MainActivity) })
             addView(button("Accept mic watch consent") { showMicWatchConsentDialog(startAfterAccept = false) })
             addView(button("App info") { openAppInfo() })
             addView(button("Return to Omi") { openOmiPluginPage() })
@@ -278,6 +293,7 @@ class MainActivity : Activity() {
             addView(text("Capture tools", 16, bold = true))
             addView(text("Idle notification: ${if (prefs.armedStatusNotificationEnabled) "on" else "off"}", 12))
             addView(text("Continuous mic watch: ${if (prefs.continuousMicWatchEnabled) "on" else "off"}", 12))
+            addView(text("Companion associations: ${CompanionDeviceSupport.associationCount(this@MainActivity)}", 12))
             addView(row(
                 button("Screen audio") { requestMediaProjection() },
                 button("Stop screen audio") { MediaProjectionSessionService.stop(this@MainActivity) },
@@ -297,6 +313,7 @@ class MainActivity : Activity() {
                     }
                 },
             ))
+            addView(button("Pair companion device") { CompanionDeviceSupport.requestAssociation(this@MainActivity) })
             addView(text("Storage", 16, bold = true))
             addView(row(
                 button("Delete synced") { deleteSpool("synced") },
@@ -391,8 +408,10 @@ class MainActivity : Activity() {
             "Accessibility enabled" to isAccessibilityEnabled(),
             "Notification listener enabled" to isNotificationListenerEnabled(),
             "Battery unrestricted/exempt" to isBatteryExempt(),
+            "Companion device support" to CompanionDeviceSupport.hasFeature(this),
         )
         val optionalChecks = listOf(
+            "Companion association" to (CompanionDeviceSupport.associationCount(this) > 0),
             "Plugin URL" to prefs.pluginBaseUrl.isNotBlank(),
             "Plugin device token" to secure.getSecret("device_token").isNotBlank(),
             "Plugin pinned key" to (prefs.controllerKeyId.isNotBlank() && prefs.controllerPublicKey.isNotBlank()),
@@ -402,6 +421,7 @@ class MainActivity : Activity() {
             append(requiredChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" })
             appendLine()
             appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
+            appendLine("Companion mode: ${CompanionDeviceSupport.associationCount(this@MainActivity)} associated device(s)")
             appendLine()
             appendLine("Optional controller plugin")
             append(optionalChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "SKIPPED"} - $label" })

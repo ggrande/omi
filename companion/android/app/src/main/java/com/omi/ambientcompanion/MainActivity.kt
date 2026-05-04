@@ -115,7 +115,7 @@ class MainActivity : Activity() {
         ))
         root.addView(row(
             button("Start") { startFullCapture() },
-            button("Sync") { SyncWorker.drainAsync(this) },
+            button("Sync") { AmbientForegroundMicService.command(this, AmbientForegroundMicService.ACTION_FLUSH_SYNC) },
         ))
         root.addView(row(
             button("Pause") { AmbientForegroundMicService.command(this, AmbientForegroundMicService.ACTION_PAUSE) },
@@ -299,6 +299,7 @@ class MainActivity : Activity() {
             addView(text("Idle notification: ${if (prefs.armedStatusNotificationEnabled) "on" else "off"}", 12))
             addView(text("Sampled VAD: ${if (prefs.sampledVadEnabled) "on (${prefs.sampledVadWindowMs}ms every ${prefs.sampledVadIntervalMs / 1000}s)" else "off"}", 12))
             addView(text("Continuous mic watch: ${if (prefs.continuousMicWatchEnabled) "on" else "off"}", 12))
+            addView(text("Auto segment rollover: every ${prefs.maxActiveSegmentSeconds}s while speech/noise stays active", 12))
             addView(text("Companion associations: ${CompanionDeviceSupport.associationCount(this@MainActivity)}", 12))
             addView(row(
                 button("Screen audio") { requestMediaProjection() },
@@ -344,6 +345,20 @@ class MainActivity : Activity() {
                     prefs.sampledVadIntervalMs = 30_000L
                     prefs.sampledVadWindowMs = 1_000L
                     AuditLog(this@MainActivity).record("sampled_vad_profile_changed", mapOf("profile" to "battery"))
+                },
+            ))
+            addView(row(
+                button("Segments 30s") {
+                    prefs.maxActiveSegmentSeconds = 30
+                    AuditLog(this@MainActivity).record("segment_rollover_changed", mapOf("seconds" to prefs.maxActiveSegmentSeconds))
+                },
+                button("Segments 60s") {
+                    prefs.maxActiveSegmentSeconds = 60
+                    AuditLog(this@MainActivity).record("segment_rollover_changed", mapOf("seconds" to prefs.maxActiveSegmentSeconds))
+                },
+                button("Segments 2m") {
+                    prefs.maxActiveSegmentSeconds = 120
+                    AuditLog(this@MainActivity).record("segment_rollover_changed", mapOf("seconds" to prefs.maxActiveSegmentSeconds))
                 },
             ))
             addView(button("Pair companion device") { CompanionDeviceSupport.requestAssociation(this@MainActivity) })
@@ -454,6 +469,7 @@ class MainActivity : Activity() {
             appendLine()
             appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
             appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
+            appendLine("Auto segment rollover: ${prefs.maxActiveSegmentSeconds}s")
             appendLine("Sync: ${prefs.lastSyncLabel}")
             appendLine(AudioSignalStore.label())
             appendLine(AudioSystemSignals.label(this@MainActivity))

@@ -9,19 +9,19 @@ object SyncWorker {
     private var running = false
 
     @Synchronized
-    fun drainAsync(context: Context) {
+    fun drainAsync(context: Context, force: Boolean = false) {
         if (running) return
         running = true
         thread(name = "ambient-sync") {
             try {
-                drain(context.applicationContext)
+                drain(context.applicationContext, force)
             } finally {
                 running = false
             }
         }
     }
 
-    fun drain(context: Context) {
+    fun drain(context: Context, force: Boolean = false) {
         val prefs = AppPrefs(context)
         if (!networkAvailable(context)) {
             prefs.lastSyncLabel = "Network unavailable; buffering locally"
@@ -29,7 +29,11 @@ object SyncWorker {
         }
         val audit = AuditLog(context)
         val now = System.currentTimeMillis()
-        if (prefs.nextSyncAfterMs > now) {
+        if (force) {
+            prefs.nextSyncAfterMs = 0
+            prefs.syncFailureCount = 0
+            audit.record("sync_backoff_cleared", mapOf("reason" to "manual_or_segment_flush"))
+        } else if (prefs.nextSyncAfterMs > now) {
             prefs.lastSyncLabel = "Backoff active; retry in ${(prefs.nextSyncAfterMs - now) / 1000}s"
             audit.record("sync_backoff_active", mapOf("retry_after_ms" to (prefs.nextSyncAfterMs - now)))
             return
@@ -66,8 +70,12 @@ object SyncWorker {
         val spool = CaptureSpoolStore(context)
         val uploaded = mutableListOf<String>()
         val uploadedSessions = mutableListOf<String>()
+        val pendingSpool = spool.list("pending")
+        if (pendingSpool.isNotEmpty()) {
+            prefs.lastSyncLabel = "Uploading ${pendingSpool.size} audio segment(s)"
+        }
         if (prefs.allowAudioUpload) {
-            spool.list("pending").forEach { meta ->
+            pendingSpool.forEach { meta ->
                 attempted = true
                 val uploadedToOmi = omiAuth.uploadAudioFile(meta, spool.readPlainChunks(meta))
                 val uploadedToController = if (uploadedToOmi) false else client.uploadAudioFile(meta, spool.readPlainChunks(meta))

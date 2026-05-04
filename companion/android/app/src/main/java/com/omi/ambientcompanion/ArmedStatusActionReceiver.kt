@@ -15,7 +15,7 @@ class ArmedStatusActionReceiver : BroadcastReceiver() {
                     AuditLog(context).record("mic_start_blocked_missing_consent", mapOf("source" to "armed_notification"))
                 }
             }
-            ACTION_SYNC -> SyncWorker.drainAsync(context)
+            ACTION_SYNC -> AmbientForegroundMicService.command(context, AmbientForegroundMicService.ACTION_FLUSH_SYNC)
             ACTION_PAUSE -> {
                 AmbientForegroundMicService.command(context, AmbientForegroundMicService.ACTION_PAUSE)
                 ArmedStatusNotifier.show(context, "Paused. Mic is idle.")

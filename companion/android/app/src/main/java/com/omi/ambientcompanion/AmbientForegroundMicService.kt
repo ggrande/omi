@@ -59,6 +59,7 @@ class AmbientForegroundMicService : Service() {
             ACTION_RESUME -> resumeCapture()
             ACTION_STOP -> stopCapture(stopSelf = true)
             ACTION_PRIVATE -> enterPrivateMode()
+            ACTION_FLUSH_SYNC -> flushCurrentSegmentAndSync("command")
         }
         return START_STICKY
     }
@@ -176,12 +177,14 @@ class AmbientForegroundMicService : Service() {
             pluginClient.sendTelemetry("speech_detected", lastHealth, ContextSignals.snapshot())
         }
         if (speechSessionActive) {
+            maybeRollActiveSegment()
             val write = spoolStore.writeChunk(chunk)
             if (!write.ok) {
                 updateHealth(HealthEvent(AmbientHealthState.STORAGE_LIMIT_REACHED, write.reason, ContextSignals.foregroundPackage))
                 pauseCapture()
             } else if (result.speech) {
                 updateHealth(HealthEvent(AmbientHealthState.AUDIO_OK, "speech_audio", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
+                prefs.lastSyncLabel = "Recording segment; sync after close or tap Sync"
             }
         }
         if (speechSessionActive && !vad.activeSpeech) {
@@ -193,6 +196,37 @@ class AmbientForegroundMicService : Service() {
             LocalSttWorker(applicationContext).drainSpoolForLocalTranscripts()
             SyncWorker.drainAsync(applicationContext)
         }
+    }
+
+    private fun maybeRollActiveSegment() {
+        if (!speechSessionActive || !spoolStore.hasOpenSession()) return
+        val maxMs = prefs.maxActiveSegmentSeconds.toLong() * 1000L
+        if (spoolStore.currentSessionAgeMs() < maxMs) return
+        val bytes = spoolStore.currentSessionBytes()
+        spoolStore.closeSession()
+        audit.record("spool_session_rolled", mapOf("reason" to "max_active_segment_seconds", "bytes" to bytes))
+        prefs.lastSyncLabel = "Segment closed; upload queued"
+        LocalSttWorker(applicationContext).drainSpoolForLocalTranscripts()
+        SyncWorker.drainAsync(applicationContext, force = true)
+        spoolStore.startSession()
+        updateNotification("Recording; previous segment syncing")
+    }
+
+    private fun flushCurrentSegmentAndSync(reason: String) {
+        val wasOpen = speechSessionActive && spoolStore.hasOpenSession()
+        if (wasOpen) {
+            val bytes = spoolStore.currentSessionBytes()
+            spoolStore.closeSession()
+            speechSessionActive = false
+            audit.record("spool_flush_requested", mapOf("reason" to reason, "bytes" to bytes))
+            prefs.lastSyncLabel = "Flushed active segment; sync queued"
+            updateNotification("Syncing flushed segment")
+        } else {
+            audit.record("sync_requested", mapOf("reason" to reason, "active_segment" to false))
+            prefs.lastSyncLabel = "Sync requested"
+        }
+        LocalSttWorker(applicationContext).drainSpoolForLocalTranscripts()
+        SyncWorker.drainAsync(applicationContext, force = true)
     }
 
     private fun openRecorder(): AudioRecord? {
@@ -380,8 +414,9 @@ class AmbientForegroundMicService : Service() {
             .setContentIntent(open)
             .addAction(Notification.Action.Builder(0, "Pause", serviceIntent(ACTION_PAUSE, 1)).build())
             .addAction(Notification.Action.Builder(0, "Resume", serviceIntent(ACTION_RESUME, 2)).build())
-            .addAction(Notification.Action.Builder(0, "Stop", serviceIntent(ACTION_STOP, 3)).build())
-            .addAction(Notification.Action.Builder(0, "Private", serviceIntent(ACTION_PRIVATE, 4)).build())
+            .addAction(Notification.Action.Builder(0, "Sync", serviceIntent(ACTION_FLUSH_SYNC, 3)).build())
+            .addAction(Notification.Action.Builder(0, "Stop", serviceIntent(ACTION_STOP, 4)).build())
+            .addAction(Notification.Action.Builder(0, "Private", serviceIntent(ACTION_PRIVATE, 5)).build())
             .build()
     }
 
@@ -403,6 +438,7 @@ class AmbientForegroundMicService : Service() {
         const val ACTION_RESUME = "com.omi.ambientcompanion.RESUME"
         const val ACTION_STOP = "com.omi.ambientcompanion.STOP"
         const val ACTION_PRIVATE = "com.omi.ambientcompanion.PRIVATE"
+        const val ACTION_FLUSH_SYNC = "com.omi.ambientcompanion.FLUSH_SYNC"
         private const val EXTRA_REASON = "reason"
         @Volatile private var lastState: AmbientHealthState = AmbientHealthState.IDLE_CONTEXT_WATCH
 
@@ -440,6 +476,14 @@ class AmbientForegroundMicService : Service() {
         }
 
         fun command(context: Context, action: String) {
+            if (action == ACTION_FLUSH_SYNC && lastState == AmbientHealthState.IDLE_CONTEXT_WATCH) {
+                val prefs = AppPrefs(context)
+                prefs.nextSyncAfterMs = 0
+                prefs.lastSyncLabel = "Sync requested"
+                AuditLog(context).record("sync_requested", mapOf("source" to "idle_command"))
+                SyncWorker.drainAsync(context, force = true)
+                return
+            }
             if (action == ACTION_STOP || action == ACTION_PAUSE || action == ACTION_PRIVATE) {
                 if (lastState == AmbientHealthState.IDLE_CONTEXT_WATCH) {
                     if (action == ACTION_PRIVATE) {

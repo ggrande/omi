@@ -49,6 +49,18 @@ class CaptureSpoolStore(private val context: Context) {
     }
 
     @Synchronized
+    fun hasOpenSession(): Boolean = currentFile != null
+
+    @Synchronized
+    fun currentSessionAgeMs(nowMs: Long = System.currentTimeMillis()): Long {
+        val started = currentStartedAt ?: return 0L
+        return (nowMs - started.toEpochMilli()).coerceAtLeast(0L)
+    }
+
+    @Synchronized
+    fun currentSessionBytes(): Long = currentBytes
+
+    @Synchronized
     fun closeSession(status: String = "pending") {
         if (currentFile != null) {
             writeMetadata(status)
@@ -117,10 +129,14 @@ class CaptureSpoolStore(private val context: Context) {
 
     fun stats(): Map<String, Any> {
         val items = list()
+        val pending = items.filter { it.status == "pending" }
+        val nowMs = System.currentTimeMillis()
+        val oldestPendingSeconds = pending.minOfOrNull { ((nowMs - it.startedAt.toEpochMilli()) / 1000L).coerceAtLeast(0L) } ?: 0L
         return mapOf(
-            "pending_count" to items.count { it.status == "pending" },
+            "pending_count" to pending.size,
             "synced_count" to items.count { it.status == "synced" },
             "bytes" to items.sumOf { it.bytes },
+            "oldest_pending_seconds" to oldestPendingSeconds,
             "max_storage_mb" to prefs.maxStorageMb,
             "min_free_storage_mb" to prefs.minFreeStorageMb,
         )

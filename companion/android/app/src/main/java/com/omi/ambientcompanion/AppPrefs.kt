@@ -148,6 +148,10 @@ class AppPrefs(context: Context) {
         get() = prefs.getLong("sampled_vad_window_ms", 1_500L)
         set(value) = prefs.edit().putLong("sampled_vad_window_ms", value.coerceIn(500L, 10_000L)).apply()
 
+    var maxActiveSegmentSeconds: Int
+        get() = prefs.getInt("max_active_segment_seconds", 60)
+        set(value) = prefs.edit().putInt("max_active_segment_seconds", value.coerceIn(15, 600)).apply()
+
     var lastSyncLabel: String
         get() = prefs.getString("last_sync_label", "Not synced yet") ?: "Not synced yet"
         set(value) = prefs.edit().putString("last_sync_label", value.take(180)).apply()

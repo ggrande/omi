@@ -33,6 +33,7 @@ class CaptureSpoolStore(private val context: Context) {
         val stamp = DateTimeFormatter.ISO_INSTANT.format(currentStartedAt).replace(':', '-')
         currentFile = File(dir, "ambient_companion_pcm16_16000_1_${stamp}_${part}.bin")
         audit.record("spool_session_started", mapOf("session_id" to currentSessionId, "file" to currentFile?.absolutePath))
+        CaptureActivityStore(context).recordPending(currentSessionId)
     }
 
     @Synchronized

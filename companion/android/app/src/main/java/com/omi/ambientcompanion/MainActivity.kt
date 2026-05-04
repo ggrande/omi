@@ -249,6 +249,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 12, 24, 12)
             setBackgroundColor(0xff050507.toInt())
+            addView(text(setupChecklist(), 12, bold = true))
             addView(text("Enable the Android permissions that keep capture reliable. Accessibility and notification access are used for context and caption fallbacks.", 14))
             addView(text("Direct Omi sync only needs Omi sign-in and microphone permission. Accessibility, notification listener, and unrestricted battery make context triggers and fallbacks much more reliable.", 12))
             addView(text("By default the companion is armed without using the microphone. Continuous mic watch only starts after you explicitly accept it.", 12, bold = true))
@@ -292,6 +293,7 @@ class MainActivity : Activity() {
             ))
             addView(text("Capture tools", 16, bold = true))
             addView(text("Idle notification: ${if (prefs.armedStatusNotificationEnabled) "on" else "off"}", 12))
+            addView(text("Sampled VAD: ${if (prefs.sampledVadEnabled) "on (${prefs.sampledVadWindowMs}ms every ${prefs.sampledVadIntervalMs / 1000}s)" else "off"}", 12))
             addView(text("Continuous mic watch: ${if (prefs.continuousMicWatchEnabled) "on" else "off"}", 12))
             addView(text("Companion associations: ${CompanionDeviceSupport.associationCount(this@MainActivity)}", 12))
             addView(row(
@@ -311,6 +313,22 @@ class MainActivity : Activity() {
                         prefs.continuousMicWatchEnabled = !prefs.continuousMicWatchEnabled
                         AuditLog(this@MainActivity).record("continuous_mic_watch_changed", mapOf("enabled" to prefs.continuousMicWatchEnabled))
                     }
+                },
+            ))
+            addView(row(
+                button("Toggle sampled VAD") {
+                    prefs.sampledVadEnabled = !prefs.sampledVadEnabled
+                    AuditLog(this@MainActivity).record("sampled_vad_changed", mapOf("enabled" to prefs.sampledVadEnabled))
+                },
+                button("Faster checks") {
+                    prefs.sampledVadIntervalMs = 10_000L
+                    prefs.sampledVadWindowMs = 2_000L
+                    AuditLog(this@MainActivity).record("sampled_vad_profile_changed", mapOf("profile" to "faster"))
+                },
+                button("Battery checks") {
+                    prefs.sampledVadIntervalMs = 30_000L
+                    prefs.sampledVadWindowMs = 1_000L
+                    AuditLog(this@MainActivity).record("sampled_vad_profile_changed", mapOf("profile" to "battery"))
                 },
             ))
             addView(button("Pair companion device") { CompanionDeviceSupport.requestAssociation(this@MainActivity) })
@@ -351,27 +369,24 @@ class MainActivity : Activity() {
         if (::storage.isInitialized) {
             val currentSession = CaptureSessionStore(this).current()?.toString() ?: "none"
             storage.text =
-                "Storage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
+                "Sync: ${prefs.lastSyncLabel}\nStorage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
         }
         refreshActivityChart()
     }
 
     private fun refreshActivityChart() {
         if (!::chartRow.isInitialized) return
-        val nowMinute = System.currentTimeMillis() / 60_000L
-        val buckets = (14 downTo 0).map { minuteOffset ->
-            val minute = nowMinute - minuteOffset
-            val items = CaptureSpoolStore(this).list().filter { it.startedAt.toEpochMilli() / 60_000L == minute }
-            Pair(items.count { it.status == "pending" }, items.count { it.status == "synced" })
-        }
-        val maxCount = buckets.maxOfOrNull { it.first + it.second }?.coerceAtLeast(1) ?: 1
+        val buckets = CaptureActivityStore(this).buckets(15)
+        val maxCount = buckets.maxOfOrNull { it.pending + it.synced }?.coerceAtLeast(1) ?: 1
         chartRow.removeAllViews()
-        buckets.forEach { (pending, synced) ->
+        buckets.forEach { bucket ->
             val column = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.BOTTOM
                 setPadding(2, 0, 2, 0)
             }
+            val pending = bucket.pending
+            val synced = bucket.synced
             val syncedHeight = dp(44 * synced / maxCount).coerceAtLeast(if (synced > 0) dp(4) else 0)
             val pendingHeight = dp(44 * pending / maxCount).coerceAtLeast(if (pending > 0) dp(4) else 0)
             val spacerHeight = (dp(48) - syncedHeight - pendingHeight).coerceAtLeast(0)
@@ -421,6 +436,8 @@ class MainActivity : Activity() {
             append(requiredChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" })
             appendLine()
             appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
+            appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
+            appendLine("Sync: ${prefs.lastSyncLabel}")
             appendLine("Companion mode: ${CompanionDeviceSupport.associationCount(this@MainActivity)} associated device(s)")
             appendLine()
             appendLine("Optional controller plugin")
@@ -528,6 +545,23 @@ class MainActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun setupChecklist(): String {
+        val items = listOf(
+            "Omi sign-in" to OmiAuthClient(this).isSignedIn(),
+            "Notifications" to (Build.VERSION.SDK_INT < 33 || hasPermission(Manifest.permission.POST_NOTIFICATIONS)),
+            "Mic permission" to hasPermission(Manifest.permission.RECORD_AUDIO),
+            "Mic watch consent" to prefs.micWatchConsentAccepted,
+            "Accessibility context" to isAccessibilityEnabled(),
+            "Notification listener" to isNotificationListenerEnabled(),
+            "Battery unrestricted" to isBatteryExempt(),
+            "Companion device" to (CompanionDeviceSupport.associationCount(this) > 0),
+        )
+        return buildString {
+            appendLine("Setup checklist")
+            items.forEach { (label, ok) -> appendLine("${if (ok) "OK" else "TODO"} - $label") }
+        }.trim()
+    }
 
     private fun showMicWatchConsentDialog(startAfterAccept: Boolean) {
         AlertDialog.Builder(this)

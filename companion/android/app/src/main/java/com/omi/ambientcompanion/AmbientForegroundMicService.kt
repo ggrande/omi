@@ -74,7 +74,7 @@ class AmbientForegroundMicService : Service() {
         if (capturing.get()) return
         configureVadFromPrefs()
         ArmedStatusNotifier.cancel(this)
-        startForeground(NOTIFICATION_ID, buildNotification("VAD watch"))
+        startForeground(NOTIFICATION_ID, buildNotification(if (prefs.sampledVadEnabled) "Sampled VAD" else "VAD watch"))
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             updateHealth(HealthEvent(AmbientHealthState.PERMISSION_MISSING, "record_audio_missing"))
             return
@@ -85,7 +85,7 @@ class AmbientForegroundMicService : Service() {
         paused.set(false)
         privateMode.set(false)
         capturing.set(true)
-        updateHealth(HealthEvent(AmbientHealthState.VAD_WATCH, reason, ContextSignals.foregroundPackage))
+        updateHealth(HealthEvent(if (prefs.sampledVadEnabled) AmbientHealthState.SAMPLED_VAD else AmbientHealthState.VAD_WATCH, reason, ContextSignals.foregroundPackage))
         communicationMonitor.start()
         startPolicyLoop()
         captureThread = thread(name = "ambient-vad-capture") { captureLoop() }
@@ -94,29 +94,55 @@ class AmbientForegroundMicService : Service() {
     }
 
     private fun captureLoop() {
-        val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
-        val frameBytes = 960 // 30 ms @ 16 kHz mono PCM16
-        val bufferBytes = maxOf(minBuffer, frameBytes * 4)
-        recorder = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,
-            SAMPLE_RATE,
-            CHANNEL_CONFIG,
-            AUDIO_FORMAT,
-            bufferBytes,
-        )
-        val localRecorder = recorder ?: return
-        try {
-            localRecorder.startRecording()
-        } catch (e: Throwable) {
-            updateHealth(HealthEvent(AmbientHealthState.RECOVERY_NEEDED, "audio_record_start_failed:${e.javaClass.simpleName}"))
-            return
-        }
-        val buffer = ByteArray(frameBytes)
         while (capturing.get()) {
             if (paused.get() || privateMode.get()) {
                 Thread.sleep(250)
                 continue
             }
+
+            val localRecorder = if (prefs.sampledVadEnabled && !speechSessionActive) {
+                updateHealth(HealthEvent(AmbientHealthState.SAMPLED_VAD, "waiting_for_sample_window", ContextSignals.foregroundPackage))
+                updateNotification("Sampled VAD")
+                sampleForSpeech() ?: run {
+                    sleepResponsive(prefs.sampledVadIntervalMs)
+                    null
+                }
+            } else {
+                openRecorder()
+            } ?: continue
+
+            activeReadLoop(localRecorder, exitAfterSampledSpeech = prefs.sampledVadEnabled)
+            runCatching { localRecorder.stop() }
+            localRecorder.release()
+            recorder = null
+        }
+    }
+
+    private fun sampleForSpeech(): AudioRecord? {
+        val localRecorder = openRecorder() ?: return null
+        updateNotification("Checking for speech")
+        val buffer = ByteArray(FRAME_BYTES)
+        val deadline = System.currentTimeMillis() + prefs.sampledVadWindowMs
+        while (capturing.get() && !paused.get() && !privateMode.get() && System.currentTimeMillis() < deadline) {
+            val read = localRecorder.read(buffer, 0, buffer.size)
+            if (read <= 0) {
+                updateHealth(HealthEvent(AmbientHealthState.RECOVERY_NEEDED, "sample_audio_read_$read", ContextSignals.foregroundPackage))
+                continue
+            }
+            lastAudioAt = System.currentTimeMillis()
+            handleAudioChunk(buffer.copyOf(read))
+            if (speechSessionActive) return localRecorder
+        }
+        runCatching { localRecorder.stop() }
+        localRecorder.release()
+        recorder = null
+        return null
+    }
+
+    private fun activeReadLoop(localRecorder: AudioRecord, exitAfterSampledSpeech: Boolean) {
+        val buffer = ByteArray(FRAME_BYTES)
+        while (capturing.get() && !paused.get() && !privateMode.get()) {
+            val wasActive = speechSessionActive
             val read = localRecorder.read(buffer, 0, buffer.size)
             if (read <= 0) {
                 updateHealth(HealthEvent(AmbientHealthState.RECOVERY_NEEDED, "audio_read_$read", ContextSignals.foregroundPackage))
@@ -124,42 +150,73 @@ class AmbientForegroundMicService : Service() {
                 continue
             }
             lastAudioAt = System.currentTimeMillis()
-            val chunk = buffer.copyOf(read)
-            val result = vad.accept(chunk)
-            communicationMonitor.evaluate()
-            if (!speechSessionActive && vad.activeSpeech) {
-                speechSessionActive = true
-                acquireWakeLock()
-                spoolStore.startSession()
-                vad.drainPreRoll().forEach { spoolStore.writeChunk(it) }
-                updateHealth(HealthEvent(AmbientHealthState.SPEECH_DETECTED, "vad_triggered", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
-                updateNotification("Speech detected")
-                pluginClient.sendTelemetry("speech_detected", lastHealth, ContextSignals.snapshot())
-            }
-            if (speechSessionActive) {
-                val write = spoolStore.writeChunk(chunk)
-                if (!write.ok) {
-                    updateHealth(HealthEvent(AmbientHealthState.STORAGE_LIMIT_REACHED, write.reason, ContextSignals.foregroundPackage))
-                    pauseCapture()
-                } else if (result.speech) {
-                    updateHealth(HealthEvent(AmbientHealthState.AUDIO_OK, "speech_audio", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
-                }
-            }
-            if (speechSessionActive && !vad.activeSpeech) {
-                speechSessionActive = false
-                spoolStore.closeSession()
-                releaseWakeLock()
-                updateHealth(HealthEvent(AmbientHealthState.VAD_WATCH, "silence_timeout", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
-                updateNotification("VAD watch")
-                LocalSttWorker(applicationContext).drainSpoolForLocalTranscripts()
-                SyncWorker.drainAsync(applicationContext)
-            }
-            if (System.currentTimeMillis() - lastAudioAt > 30_000) {
-                updateHealth(HealthEvent(AmbientHealthState.RECOVERY_NEEDED, "no_audio_chunks_received"))
+            handleAudioChunk(buffer.copyOf(read))
+            if (exitAfterSampledSpeech && wasActive && !speechSessionActive) break
+            if (System.currentTimeMillis() - lastAudioAt > 30_000) updateHealth(HealthEvent(AmbientHealthState.RECOVERY_NEEDED, "no_audio_chunks_received"))
+        }
+    }
+
+    private fun handleAudioChunk(chunk: ByteArray) {
+        val result = vad.accept(chunk)
+        communicationMonitor.evaluate()
+        if (!speechSessionActive && vad.activeSpeech) {
+            speechSessionActive = true
+            acquireWakeLock()
+            spoolStore.startSession()
+            vad.drainPreRoll().forEach { spoolStore.writeChunk(it) }
+            updateHealth(HealthEvent(AmbientHealthState.SPEECH_DETECTED, "vad_triggered", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
+            updateNotification("Speech detected")
+            pluginClient.sendTelemetry("speech_detected", lastHealth, ContextSignals.snapshot())
+        }
+        if (speechSessionActive) {
+            val write = spoolStore.writeChunk(chunk)
+            if (!write.ok) {
+                updateHealth(HealthEvent(AmbientHealthState.STORAGE_LIMIT_REACHED, write.reason, ContextSignals.foregroundPackage))
+                pauseCapture()
+            } else if (result.speech) {
+                updateHealth(HealthEvent(AmbientHealthState.AUDIO_OK, "speech_audio", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
             }
         }
-        runCatching { localRecorder.stop() }
-        localRecorder.release()
+        if (speechSessionActive && !vad.activeSpeech) {
+            speechSessionActive = false
+            spoolStore.closeSession()
+            releaseWakeLock()
+            updateHealth(HealthEvent(if (prefs.sampledVadEnabled) AmbientHealthState.SAMPLED_VAD else AmbientHealthState.VAD_WATCH, "silence_timeout", ContextSignals.foregroundPackage, result.dbfs, result.zeroRatio))
+            updateNotification(if (prefs.sampledVadEnabled) "Sampled VAD" else "VAD watch")
+            LocalSttWorker(applicationContext).drainSpoolForLocalTranscripts()
+            SyncWorker.drainAsync(applicationContext)
+        }
+    }
+
+    private fun openRecorder(): AudioRecord? {
+        recorder?.let { return it }
+        val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
+        val bufferBytes = maxOf(minBuffer, FRAME_BYTES * 4)
+        val localRecorder = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE,
+            CHANNEL_CONFIG,
+            AUDIO_FORMAT,
+            bufferBytes,
+        )
+        return try {
+            localRecorder.startRecording()
+            recorder = localRecorder
+            localRecorder
+        } catch (e: Throwable) {
+            updateHealth(HealthEvent(AmbientHealthState.RECOVERY_NEEDED, "audio_record_start_failed:${e.javaClass.simpleName}"))
+            runCatching { localRecorder.release() }
+            null
+        }
+    }
+
+    private fun sleepResponsive(totalMs: Long) {
+        var slept = 0L
+        while (capturing.get() && !paused.get() && !privateMode.get() && slept < totalMs) {
+            val step = minOf(500L, totalMs - slept)
+            Thread.sleep(step)
+            slept += step
+        }
     }
 
     private fun pauseCapture() {
@@ -330,6 +387,7 @@ class AmbientForegroundMicService : Service() {
         private const val SAMPLE_RATE = 16_000
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
+        private const val FRAME_BYTES = 960 // 30 ms @ 16 kHz mono PCM16
         private const val CHANNEL_ID = "omi_ambient_companion"
         private const val NOTIFICATION_ID = 55042
         const val ACTION_HEALTH_CHANGED = "com.omi.ambientcompanion.HEALTH_CHANGED"

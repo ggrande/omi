@@ -22,11 +22,15 @@ object SyncWorker {
     }
 
     fun drain(context: Context) {
-        if (!networkAvailable(context)) return
-        val audit = AuditLog(context)
         val prefs = AppPrefs(context)
+        if (!networkAvailable(context)) {
+            prefs.lastSyncLabel = "Network unavailable; buffering locally"
+            return
+        }
+        val audit = AuditLog(context)
         val now = System.currentTimeMillis()
         if (prefs.nextSyncAfterMs > now) {
+            prefs.lastSyncLabel = "Backoff active; retry in ${(prefs.nextSyncAfterMs - now) / 1000}s"
             audit.record("sync_backoff_active", mapOf("retry_after_ms" to (prefs.nextSyncAfterMs - now)))
             return
         }
@@ -61,6 +65,7 @@ object SyncWorker {
         LocalSttWorker(context).drainSpoolForLocalTranscripts()
         val spool = CaptureSpoolStore(context)
         val uploaded = mutableListOf<String>()
+        val uploadedSessions = mutableListOf<String>()
         if (prefs.allowAudioUpload) {
             spool.list("pending").forEach { meta ->
                 attempted = true
@@ -68,6 +73,7 @@ object SyncWorker {
                 val uploadedToController = if (uploadedToOmi) false else client.uploadAudioFile(meta, spool.readPlainChunks(meta))
                 if (uploadedToOmi || uploadedToController) {
                     uploaded.add(meta.filePath)
+                    uploadedSessions.add(meta.sessionId)
                     succeeded = true
                     audit.record(
                         "spool_audio_uploaded",
@@ -84,13 +90,18 @@ object SyncWorker {
         }
         if (uploaded.isNotEmpty()) {
             spool.markStatus(uploaded, "synced")
+            CaptureActivityStore(context).markSynced(uploadedSessions)
             if (prefs.deleteSyncedAudio) spool.deleteByStatus("synced")
         }
         if (attempted && succeeded) {
             prefs.syncFailureCount = 0
             prefs.nextSyncAfterMs = 0
+            prefs.lastSyncLabel = "Last sync succeeded"
         } else if (attempted) {
+            prefs.lastSyncLabel = "Last sync failed; retry scheduled"
             scheduleBackoff(prefs, audit)
+        } else {
+            prefs.lastSyncLabel = "Nothing pending to sync"
         }
     }
 

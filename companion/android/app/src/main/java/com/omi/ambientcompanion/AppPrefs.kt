@@ -136,6 +136,22 @@ class AppPrefs(context: Context) {
         get() = prefs.getBoolean("continuous_mic_watch_enabled", false)
         set(value) = prefs.edit().putBoolean("continuous_mic_watch_enabled", value).apply()
 
+    var sampledVadEnabled: Boolean
+        get() = prefs.getBoolean("sampled_vad_enabled", true)
+        set(value) = prefs.edit().putBoolean("sampled_vad_enabled", value).apply()
+
+    var sampledVadIntervalMs: Long
+        get() = prefs.getLong("sampled_vad_interval_ms", 15_000L)
+        set(value) = prefs.edit().putLong("sampled_vad_interval_ms", value.coerceIn(5_000L, 120_000L)).apply()
+
+    var sampledVadWindowMs: Long
+        get() = prefs.getLong("sampled_vad_window_ms", 1_500L)
+        set(value) = prefs.edit().putLong("sampled_vad_window_ms", value.coerceIn(500L, 10_000L)).apply()
+
+    var lastSyncLabel: String
+        get() = prefs.getString("last_sync_label", "Not synced yet") ?: "Not synced yet"
+        set(value) = prefs.edit().putString("last_sync_label", value.take(180)).apply()
+
     var appInForeground: Boolean
         get() = prefs.getBoolean("app_in_foreground", false)
         set(value) = prefs.edit().putBoolean("app_in_foreground", value).apply()

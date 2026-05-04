@@ -6,6 +6,7 @@ import java.util.UUID
 
 enum class AmbientHealthState {
     IDLE_CONTEXT_WATCH,
+    SAMPLED_VAD,
     VAD_WATCH,
     AUDIO_OK,
     SPEECH_DETECTED,

@@ -50,6 +50,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = AppPrefs(this)
+        AmbientMaintenanceScheduler.schedule(this, "ui")
         setContentView(buildUi())
         handleOauthCallback(intent)
         handleSetupLink(intent)
@@ -383,7 +384,7 @@ class MainActivity : Activity() {
         if (::storage.isInitialized) {
             val currentSession = CaptureSessionStore(this).current()?.toString() ?: "none"
             storage.text =
-                "Sync: ${prefs.lastSyncLabel}\nStorage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
+                "Sync: ${prefs.lastSyncLabel}\n${AudioSystemSignals.label(this)}\nStorage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
         }
         if (::signal.isInitialized) signal.text = AudioSignalStore.label()
         refreshActivityChart()
@@ -439,6 +440,7 @@ class MainActivity : Activity() {
             "Notification listener enabled" to isNotificationListenerEnabled(),
             "Battery unrestricted/exempt" to isBatteryExempt(),
             "Companion device support" to CompanionDeviceSupport.hasFeature(this),
+            "Maintenance job scheduled" to AmbientMaintenanceScheduler.isScheduled(this),
         )
         val optionalChecks = listOf(
             "Companion association" to (CompanionDeviceSupport.associationCount(this) > 0),
@@ -454,6 +456,8 @@ class MainActivity : Activity() {
             appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
             appendLine("Sync: ${prefs.lastSyncLabel}")
             appendLine(AudioSignalStore.label())
+            appendLine(AudioSystemSignals.label(this@MainActivity))
+            appendLine("Maintenance: ${if (prefs.lastMaintenanceAtMs > 0) "${System.currentTimeMillis() - prefs.lastMaintenanceAtMs}ms ago" else "waiting"}")
             appendLine("Companion mode: ${CompanionDeviceSupport.associationCount(this@MainActivity)} associated device(s)")
             appendLine()
             appendLine("Optional controller plugin")

@@ -19,7 +19,9 @@ class DiagnosticsStore(context: Context) {
             .put("reason", reason)
             .put("last_health_state", AmbientForegroundMicService.lastHealthState().name)
             .put("last_sync", prefs.lastSyncLabel)
+            .put("last_maintenance_at_ms", prefs.lastMaintenanceAtMs)
             .put("audio_signal", AudioSignalStore.snapshot())
+            .put("audio_system", AudioSystemSignals.snapshot(appContext))
             .put(
                 "sampled_vad",
                 JSONObject()

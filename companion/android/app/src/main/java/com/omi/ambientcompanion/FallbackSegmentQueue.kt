@@ -11,6 +11,7 @@ class FallbackSegmentQueue(context: Context) {
     @Synchronized
     fun enqueue(segment: FallbackSegment) {
         val key = "${segment.source}:${segment.text.trim().lowercase()}:${segment.start.epochSecond / 30}"
+        if (key in persistedKeys()) return
         if (key in seen) return
         seen.add(key)
         file.parentFile?.mkdirs()
@@ -44,5 +45,13 @@ class FallbackSegmentQueue(context: Context) {
             if (uploadedIds.contains(id)) null else line
         }
         file.writeText(kept.joinToString(separator = "\n", postfix = if (kept.isEmpty()) "" else "\n"))
+    }
+
+    private fun persistedKeys(): Set<String> {
+        if (!file.exists()) return emptySet()
+        return file.readLines()
+            .mapNotNull { line -> runCatching { JSONObject(line).optString("dedupe_key") }.getOrNull() }
+            .filter { it.isNotBlank() }
+            .toSet()
     }
 }

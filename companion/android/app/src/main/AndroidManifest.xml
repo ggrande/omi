@@ -82,6 +82,11 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <service
+            android:name=".AmbientMaintenanceJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
         <receiver
             android:name=".RecoveryBootReceiver"
             android:enabled="true"

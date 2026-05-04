@@ -9,5 +9,6 @@ class RecoveryBootReceiver : BroadcastReceiver() {
         if (intent?.action != Intent.ACTION_BOOT_COMPLETED) return
         AuditLog(context).record("boot_completed_cleanup")
         AppPrefs(context).explicitSessionStarted = false
+        AmbientMaintenanceScheduler.schedule(context, "boot")
     }
 }

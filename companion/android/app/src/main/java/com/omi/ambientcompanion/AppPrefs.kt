@@ -152,6 +152,10 @@ class AppPrefs(context: Context) {
         get() = prefs.getString("last_sync_label", "Not synced yet") ?: "Not synced yet"
         set(value) = prefs.edit().putString("last_sync_label", value.take(180)).apply()
 
+    var lastMaintenanceAtMs: Long
+        get() = prefs.getLong("last_maintenance_at_ms", 0)
+        set(value) = prefs.edit().putLong("last_maintenance_at_ms", value).apply()
+
     var appInForeground: Boolean
         get() = prefs.getBoolean("app_in_foreground", false)
         set(value) = prefs.edit().putBoolean("app_in_foreground", value).apply()

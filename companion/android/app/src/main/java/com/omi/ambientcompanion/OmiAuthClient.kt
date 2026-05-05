@@ -141,7 +141,7 @@ class OmiAuthClient(private val context: Context) {
             return false
         }
         val usable = segments
-            .filter { it.text.isNotBlank() && !it.rawAudioAvailable }
+            .filter { it.text.isNotBlank() && (!it.rawAudioAvailable || it.source == FallbackSource.LOCAL_STT) }
             .sortedBy { it.start }
             .take(500)
         if (usable.isEmpty()) return false
@@ -177,8 +177,14 @@ class OmiAuthClient(private val context: Context) {
             headers = mapOf("Authorization" to "Bearer $token", "Content-Type" to "application/json"),
         )
         if (response.status in 200..299) {
-            val conversationId = runCatching { JSONObject(response.body).optString("id") }.getOrDefault("")
-            audit.record("omi_fallback_segments_uploaded", mapOf("count" to usable.size, "conversation_id" to conversationId))
+            val json = runCatching { JSONObject(response.body) }.getOrNull()
+            val conversationId = json?.optString("id").orEmpty()
+            val discarded = json?.optBoolean("discarded", false) ?: false
+            prefs.lastOmiSyncTrace = "Fallback conversation: ${conversationId.take(8).ifBlank { "unknown" }} discarded=$discarded"
+            audit.record(
+                "omi_fallback_segments_uploaded",
+                mapOf("count" to usable.size, "conversation_id" to conversationId, "discarded" to discarded),
+            )
             return true
         }
         audit.record("omi_fallback_segments_failed", mapOf("status" to response.status, "body" to response.body.take(240), "count" to usable.size))
@@ -228,8 +234,8 @@ class OmiAuthClient(private val context: Context) {
             body = null,
             headers = headers,
         )
-        val memories = runCatching { JSONObject(recent.body).optJSONArray("memories") }.getOrNull()
-        val first = memories?.optJSONObject(0)
+        val memories = parseConversationList(recent.body)
+        val first = memories.optJSONObject(0)
         val firstId = first?.optString("id").orEmpty()
         val firstDiscarded = first?.optBoolean("discarded", false) ?: false
         audit.record(
@@ -237,12 +243,13 @@ class OmiAuthClient(private val context: Context) {
             mapOf(
                 "phase" to phase,
                 "http_status" to recent.status,
-                "count" to (memories?.length() ?: -1),
+                "count" to memories.length(),
                 "first_id" to firstId,
                 "first_discarded" to firstDiscarded,
+                "body" to recent.body.take(180),
             ),
         )
-        prefs.lastOmiSyncTrace = "Trace $phase: no ids returned; recent ${recent.status}, count ${memories?.length() ?: -1}"
+        prefs.lastOmiSyncTrace = "Trace $phase: no ids returned; recent ${recent.status}, count ${memories.length()}"
     }
 
     private fun pollSyncJob(baseUrl: String, body: String, headers: Map<String, String>, meta: SpoolMetadata): OmiAudioSyncResult {
@@ -328,6 +335,12 @@ class OmiAuthClient(private val context: Context) {
     private fun jsonArrayStrings(array: JSONArray?): List<String> {
         if (array == null) return emptyList()
         return (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf { it.isNotBlank() } }
+    }
+
+    private fun parseConversationList(body: String): JSONArray {
+        return runCatching { JSONArray(body) }.getOrNull()
+            ?: runCatching { JSONObject(body).optJSONArray("memories") }.getOrNull()
+            ?: JSONArray()
     }
 
     private fun exchangeCode(code: String): HttpResponse {
@@ -498,6 +511,8 @@ data class OmiAudioSyncResult(
     val body: String = "",
 ) {
     fun conversationIds(): List<String> = (newConversationIds + updatedConversationIds).distinct()
+
+    fun hasServerConversationSignal(): Boolean = conversationIds().isNotEmpty() || successfulSegments > 0
 
     fun summary(): String {
         val shortJob = jobId.take(8).ifBlank { "none" }

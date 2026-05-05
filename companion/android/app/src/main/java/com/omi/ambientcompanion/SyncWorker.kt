@@ -41,8 +41,10 @@ object SyncWorker {
         val client = PluginClient(context)
         val omiAuth = OmiAuthClient(context)
         val fallbackQueue = FallbackSegmentQueue(context)
+        val spool = CaptureSpoolStore(context)
         var attempted = false
         var succeeded = false
+        var terminalLabel: String? = null
         val pendingSegments = fallbackQueue.pending()
         val pluginReady = prefs.fallbackSegmentsUrl.isNotBlank() && SecureStore(context).getSecret("device_token").isNotBlank()
         if (pendingSegments.isNotEmpty() && pluginReady) {
@@ -52,22 +54,22 @@ object SyncWorker {
                 audit.record("fallback_segments_uploaded", mapOf("count" to pendingSegments.size))
                 succeeded = true
             }
-        } else if (pendingSegments.any { !it.rawAudioAvailable }) {
+        } else if (pendingSegments.any { it.shouldUploadDirectlyToOmi() }) {
             val directOmiFallbackSegments = pendingSegments
-                .filter { it.text.isNotBlank() && !it.rawAudioAvailable }
+                .filter { it.shouldUploadDirectlyToOmi() }
                 .sortedBy { it.start }
                 .take(500)
             attempted = true
             if (omiAuth.uploadFallbackSegments(directOmiFallbackSegments)) {
                 val uploadedIds = directOmiFallbackSegments.map { it.id }.toSet()
                 fallbackQueue.clearUploaded(uploadedIds)
+                markSpoolCoveredByFallback(context, spool, directOmiFallbackSegments, prefs)
                 succeeded = true
             }
         } else if (pendingSegments.isNotEmpty()) {
             audit.record("fallback_segments_waiting_controller", mapOf("count" to pendingSegments.size))
         }
         LocalSttWorker(context).drainSpoolForLocalTranscripts()
-        val spool = CaptureSpoolStore(context)
         val uploaded = mutableListOf<String>()
         val uploadedSessions = mutableListOf<String>()
         val pendingSpool = spool.list("pending")
@@ -78,7 +80,19 @@ object SyncWorker {
             pendingSpool.forEach { meta ->
                 attempted = true
                 val omiResult = omiAuth.uploadAudioFile(meta, spool.readPlainChunks(meta))
-                val uploadedToOmi = omiResult.success
+                val uploadedToOmi = omiResult.success && omiResult.hasServerConversationSignal()
+                if (omiResult.success && !omiResult.hasServerConversationSignal()) {
+                    terminalLabel = "Omi raw upload found no server speech; waiting for local/caption fallback"
+                    prefs.lastSyncLabel = terminalLabel
+                    audit.record(
+                        "omi_audio_sync_no_server_segments",
+                        mapOf("session_id" to meta.sessionId, "job_id" to omiResult.jobId, "status" to omiResult.status),
+                    )
+                    omiAuth.traceSyncResult(omiResult, "no_segments")
+                    LocalSttWorker(context).drainSpoolForLocalTranscripts()
+                    succeeded = true
+                    return@forEach
+                }
                 val uploadedToController = if (uploadedToOmi) false else client.uploadAudioFile(meta, spool.readPlainChunks(meta))
                 if (uploadedToOmi || uploadedToController) {
                     uploaded.add(meta.filePath)
@@ -111,7 +125,7 @@ object SyncWorker {
         if (attempted && succeeded) {
             prefs.syncFailureCount = 0
             prefs.nextSyncAfterMs = 0
-            prefs.lastSyncLabel = "Last sync succeeded"
+            prefs.lastSyncLabel = terminalLabel ?: "Last sync succeeded"
         } else if (attempted) {
             prefs.lastSyncLabel = "Last sync failed; retry scheduled"
             scheduleBackoff(prefs, audit)
@@ -136,4 +150,31 @@ object SyncWorker {
     }
 
     private const val TRACE_AFTER_UPLOAD_DELAY_MS = 20_000L
+
+    private fun FallbackSegment.shouldUploadDirectlyToOmi(): Boolean {
+        return text.isNotBlank() && (!rawAudioAvailable || source == FallbackSource.LOCAL_STT)
+    }
+
+    private fun markSpoolCoveredByFallback(
+        context: Context,
+        spool: CaptureSpoolStore,
+        segments: List<FallbackSegment>,
+        prefs: AppPrefs,
+    ) {
+        val matched = spool.list("pending").filter { meta ->
+            segments.any { segment -> overlaps(meta, segment) }
+        }
+        if (matched.isEmpty()) return
+        val paths = matched.map { it.filePath }
+        spool.markStatus(paths, "synced")
+        CaptureActivityStore(context).markSynced(matched.map { it.sessionId })
+        AuditLog(context).record("spool_audio_synced_by_fallback", mapOf("count" to matched.size))
+        if (prefs.deleteSyncedAudio) spool.deleteByStatus("synced")
+    }
+
+    private fun overlaps(meta: SpoolMetadata, segment: FallbackSegment): Boolean {
+        val metaStart = meta.startedAt.toEpochMilli() - 5000L
+        val metaEnd = meta.startedAt.toEpochMilli() + (meta.durationEstimateSeconds * 1000).toLong() + 5000L
+        return segment.end.toEpochMilli() >= metaStart && segment.start.toEpochMilli() <= metaEnd
+    }
 }

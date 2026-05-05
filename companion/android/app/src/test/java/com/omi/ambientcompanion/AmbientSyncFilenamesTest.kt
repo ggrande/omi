@@ -10,17 +10,16 @@ class AmbientSyncFilenamesTest {
     fun omiPcm16BinUsesBackendTimestampTokenInSeconds() {
         val filename = AmbientSyncFilenames.omiPcm16Bin(metadata(Instant.parse("2024-01-02T00:00:00Z")))
 
-        assertEquals("ambient_android_pcm16_16000_1_1704153600_session.bin", filename)
+        assertEquals("audio_phone_pcm16_16000_1_fs960_1704153600.bin", filename)
     }
 
     @Test
     fun omiPcm16BinClampsFutureDeviceClockBehindUploadTime() {
         val before = Instant.now().epochSecond
         val filename = AmbientSyncFilenames.omiPcm16Bin(metadata(Instant.parse("2099-01-01T00:00:00Z")))
-        val parts = filename.removeSuffix(".bin").split("_")
-        val token = parts[parts.lastIndex - 1].toLong()
+        val token = filename.substringAfterLast("_").removeSuffix(".bin").toLong()
 
-        assertEquals("ambient_android_pcm16_16000_1", parts.take(5).joinToString("_"))
+        assertTrue(filename.startsWith("audio_phone_pcm16_16000_1_fs960_"))
         assertTrue(token <= before)
         assertTrue(token.toString().length == 10)
     }

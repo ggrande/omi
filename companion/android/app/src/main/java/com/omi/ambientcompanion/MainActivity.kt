@@ -51,7 +51,7 @@ class MainActivity : Activity() {
     private val healthReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val json = intent?.getStringExtra("health") ?: return
-            status.text = prettyHealth(JSONObject(json))
+            if (::status.isInitialized) status.text = prettyHealth(JSONObject(json))
             refreshAudit()
         }
     }
@@ -78,17 +78,18 @@ class MainActivity : Activity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (!::prefs.isInitialized) return
         handleOauthCallback(intent)
         handleSetupLink(intent)
     }
 
     override fun onStart() {
         super.onStart()
-        prefs.appInForeground = true
+        if (::prefs.isInitialized) prefs.appInForeground = true
     }
 
     override fun onStop() {
-        prefs.appInForeground = false
+        if (::prefs.isInitialized) prefs.appInForeground = false
         super.onStop()
     }
 

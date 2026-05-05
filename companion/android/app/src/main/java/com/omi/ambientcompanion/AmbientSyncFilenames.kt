@@ -7,7 +7,8 @@ object AmbientSyncFilenames {
     private const val SERVER_CLOCK_SKEW_GUARD_SECONDS = 30L
 
     fun omiPcm16Bin(meta: SpoolMetadata): String {
-        return "audio_phone_pcm16_16000_1_fs160_${safeBackendTimestampSeconds(meta.startedAt)}.bin"
+        val part = meta.sessionId.filter { it.isLetterOrDigit() }.take(12).ifBlank { "1" }
+        return "ambient_android_pcm16_16000_1_${safeBackendTimestampSeconds(meta.startedAt)}_$part.bin"
     }
 
     private fun safeBackendTimestampSeconds(startedAt: Instant): Long {

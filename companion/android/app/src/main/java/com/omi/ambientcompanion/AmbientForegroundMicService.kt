@@ -53,7 +53,13 @@ class AmbientForegroundMicService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action ?: ACTION_START) {
+        val action = intent?.action
+        if (action == null) {
+            audit.record("service_restart_ignored", mapOf("reason" to "null_intent"))
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
+        when (action) {
             ACTION_START -> startCapture(intent?.getStringExtra(EXTRA_REASON) ?: "manual")
             ACTION_PAUSE -> pauseCapture()
             ACTION_RESUME -> resumeCapture()
@@ -61,7 +67,7 @@ class AmbientForegroundMicService : Service() {
             ACTION_PRIVATE -> enterPrivateMode()
             ACTION_FLUSH_SYNC -> flushCurrentSegmentAndSync("command")
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

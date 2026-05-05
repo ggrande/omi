@@ -16,6 +16,8 @@ import android.os.PowerManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.media.projection.MediaProjectionManager
 import android.view.Gravity
@@ -38,6 +40,13 @@ class MainActivity : Activity() {
     private lateinit var omiAuthStatus: TextView
     private lateinit var signal: TextView
     private lateinit var chartRow: LinearLayout
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val liveRefresh = object : Runnable {
+        override fun run() {
+            refreshLiveUi("live")
+            uiHandler.postDelayed(this, LIVE_REFRESH_MS)
+        }
+    }
 
     private val healthReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -49,15 +58,20 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = AppPrefs(this)
-        AmbientMaintenanceScheduler.schedule(this, "ui")
-        setContentView(buildUi())
-        handleOauthCallback(intent)
-        handleSetupLink(intent)
-        if (!prefs.setupIntroSeen) {
-            window.decorView.post { showSetupDialog() }
-        } else {
-            ArmedStatusNotifier.show(this)
+        runCatching {
+            prefs = AppPrefs(this)
+            AmbientMaintenanceScheduler.schedule(this, "ui")
+            setContentView(buildUi())
+            handleOauthCallback(intent)
+            handleSetupLink(intent)
+            if (!prefs.setupIntroSeen) {
+                window.decorView.post { showSetupDialog() }
+            } else {
+                ArmedStatusNotifier.show(this)
+            }
+        }.onFailure { error ->
+            runCatching { AuditLog(this).record("main_activity_startup_failed", mapOf("error" to error.toString().take(240))) }
+            setContentView(buildRecoveryUi(error))
         }
     }
 
@@ -86,10 +100,13 @@ class MainActivity : Activity() {
             @Suppress("DEPRECATION")
             registerReceiver(healthReceiver, IntentFilter(AmbientForegroundMicService.ACTION_HEALTH_CHANGED))
         }
-        refreshAudit()
+        refreshLiveUi("resume")
+        uiHandler.removeCallbacks(liveRefresh)
+        uiHandler.post(liveRefresh)
     }
 
     override fun onPause() {
+        uiHandler.removeCallbacks(liveRefresh)
         runCatching { unregisterReceiver(healthReceiver) }
         super.onPause()
     }
@@ -143,6 +160,26 @@ class MainActivity : Activity() {
         refreshPreflight()
         refreshStorage()
         refreshDiagnostics()
+        return ScrollView(this).apply { addView(root) }
+    }
+
+    private fun buildRecoveryUi(error: Throwable): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(36, 48, 36, 36)
+            setBackgroundColor(0xff050507.toInt())
+        }
+        root.addView(text("Omi Ambient Companion", 26, bold = true))
+        root.addView(text("Startup recovery", 18, bold = true))
+        root.addView(text("The normal dashboard hit an error, but this recovery screen is still running.", 14))
+        root.addView(text(error.toString().take(500), 12))
+        root.addView(button("Share diagnostics") { shareDiagnostics() })
+        root.addView(button("Open app info") { openAppInfo() })
+        root.addView(button("Delete pending audio") {
+            CaptureSpoolStore(this).deleteByStatus("pending")
+            AuditLog(this).record("spool_deleted", mapOf("status" to "pending", "source" to "recovery_ui"))
+        })
+        root.addView(text(AuditLog(this).tail(20).joinToString("\n"), 12))
         return ScrollView(this).apply { addView(root) }
     }
 
@@ -391,42 +428,58 @@ class MainActivity : Activity() {
     }
 
     private fun refreshAudit() {
-        if (::audit.isInitialized) audit.text = AuditLog(this).tail(10).joinToString("\n")
-        refreshStorage()
+        runCatching {
+            if (::audit.isInitialized) audit.text = AuditLog(this).tail(8).joinToString("\n")
+        }.onFailure { recordUiRefreshFailure("audit", it) }
     }
 
     private fun refreshStorage() {
-        if (::storage.isInitialized) {
-            val currentSession = CaptureSessionStore(this).current()?.toString() ?: "none"
-            storage.text =
-                "Sync: ${prefs.lastSyncLabel}\n${AudioSystemSignals.label(this)}\nStorage: ${CaptureSpoolStore(this).stats()}\nFallback text: ${FallbackSegmentQueue(this).stats()}\nCurrent session: $currentSession\nContext: ${ContextSignals.snapshot()}"
-        }
-        if (::signal.isInitialized) signal.text = AudioSignalStore.label()
-        refreshActivityChart()
+        runCatching {
+            if (::storage.isInitialized) {
+                val currentSession = CaptureSessionStore(this).current()
+                val spool = CaptureSpoolStore(this).stats()
+                val fallback = FallbackSegmentQueue(this).stats()
+                storage.text = buildString {
+                    appendLine("Sync: ${prefs.lastSyncLabel}")
+                    appendLine(AudioSystemSignals.label(this@MainActivity))
+                    appendLine(
+                        "Audio spool: ${spool["pending_count"]} pending, ${spool["synced_count"]} synced, " +
+                            "${formatBytes((spool["bytes"] as? Number)?.toLong() ?: 0L)}, oldest pending ${spool["oldest_pending_seconds"]}s",
+                    )
+                    appendLine("Fallback text: ${fallback["pending_count"]} pending, sources=${fallback["sources"]}")
+                    appendLine("Session: ${currentSession?.optString("status", "idle") ?: "idle"} ${currentSession?.optString("reason", "") ?: ""}")
+                    appendLine("Foreground: ${ContextSignals.foregroundPackage.orEmpty().ifBlank { "unknown" }}")
+                }.trim()
+            }
+            if (::signal.isInitialized) signal.text = AudioSignalStore.label()
+            refreshActivityChart()
+        }.onFailure { recordUiRefreshFailure("storage", it) }
     }
 
     private fun refreshActivityChart() {
-        if (!::chartRow.isInitialized) return
-        val buckets = CaptureActivityStore(this).buckets(15)
-        val maxCount = buckets.maxOfOrNull { it.pending + it.synced }?.coerceAtLeast(1) ?: 1
-        chartRow.removeAllViews()
-        buckets.forEach { bucket ->
-            val column = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.BOTTOM
-                setPadding(2, 0, 2, 0)
+        runCatching {
+            if (!::chartRow.isInitialized) return
+            val buckets = CaptureActivityStore(this).buckets(15)
+            val maxCount = buckets.maxOfOrNull { it.pending + it.synced }?.coerceAtLeast(1) ?: 1
+            chartRow.removeAllViews()
+            buckets.forEach { bucket ->
+                val column = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.BOTTOM
+                    setPadding(2, 0, 2, 0)
+                }
+                val pending = bucket.pending
+                val synced = bucket.synced
+                val syncedHeight = dp(44 * synced / maxCount).coerceAtLeast(if (synced > 0) dp(4) else 0)
+                val pendingHeight = dp(44 * pending / maxCount).coerceAtLeast(if (pending > 0) dp(4) else 0)
+                val spacerHeight = (dp(48) - syncedHeight - pendingHeight).coerceAtLeast(0)
+                column.addView(View(this@MainActivity), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, spacerHeight))
+                if (syncedHeight > 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff2ecc71.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, syncedHeight))
+                if (pendingHeight > 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff666666.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, pendingHeight))
+                if (pendingHeight == 0 && syncedHeight == 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff202026.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)))
+                chartRow.addView(column, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
             }
-            val pending = bucket.pending
-            val synced = bucket.synced
-            val syncedHeight = dp(44 * synced / maxCount).coerceAtLeast(if (synced > 0) dp(4) else 0)
-            val pendingHeight = dp(44 * pending / maxCount).coerceAtLeast(if (pending > 0) dp(4) else 0)
-            val spacerHeight = (dp(48) - syncedHeight - pendingHeight).coerceAtLeast(0)
-            column.addView(View(this@MainActivity), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, spacerHeight))
-            if (syncedHeight > 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff2ecc71.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, syncedHeight))
-            if (pendingHeight > 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff666666.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, pendingHeight))
-            if (pendingHeight == 0 && syncedHeight == 0) column.addView(View(this@MainActivity).apply { setBackgroundColor(0xff202026.toInt()) }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(4)))
-            chartRow.addView(column, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-        }
+        }.onFailure { recordUiRefreshFailure("activity_chart", it) }
     }
 
     private fun handleSetupLink(intent: Intent?) {
@@ -443,8 +496,9 @@ class MainActivity : Activity() {
 
     private fun refreshPreflight() {
         if (!::preflight.isInitialized) return
-        val secure = SecureStore(this)
-        val requiredChecks = listOf(
+        runCatching {
+            val secure = SecureStore(this)
+            val requiredChecks = listOf(
             "Omi user id" to prefs.omiUserId.isNotBlank(),
             "Omi auth token" to OmiAuthClient(this).isSignedIn(),
             "Mic watch consent" to prefs.micWatchConsentAccepted,
@@ -457,29 +511,30 @@ class MainActivity : Activity() {
             "Companion device support" to CompanionDeviceSupport.hasFeature(this),
             "Maintenance job scheduled" to AmbientMaintenanceScheduler.isScheduled(this),
         )
-        val optionalChecks = listOf(
+            val optionalChecks = listOf(
             "Companion association" to (CompanionDeviceSupport.associationCount(this) > 0),
             "Plugin URL" to prefs.pluginBaseUrl.isNotBlank(),
             "Plugin device token" to secure.getSecret("device_token").isNotBlank(),
             "Plugin pinned key" to (prefs.controllerKeyId.isNotBlank() && prefs.controllerPublicKey.isNotBlank()),
         )
-        preflight.text = buildString {
-            appendLine("Direct Omi sync")
-            append(requiredChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" })
-            appendLine()
-            appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
-            appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
-            appendLine("Auto segment rollover: ${prefs.maxActiveSegmentSeconds}s")
-            appendLine("Sync: ${prefs.lastSyncLabel}")
-            appendLine(AudioSignalStore.label())
-            appendLine(AudioSystemSignals.label(this@MainActivity))
-            appendLine("Maintenance: ${if (prefs.lastMaintenanceAtMs > 0) "${System.currentTimeMillis() - prefs.lastMaintenanceAtMs}ms ago" else "waiting"}")
-            appendLine("Companion mode: ${CompanionDeviceSupport.associationCount(this@MainActivity)} associated device(s)")
-            appendLine()
-            appendLine("Optional controller plugin")
-            append(optionalChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "SKIPPED"} - $label" })
-        }
-        if (::omiAuthStatus.isInitialized) omiAuthStatus.text = omiAuthLabel()
+            preflight.text = buildString {
+                appendLine("Direct Omi sync")
+                append(requiredChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "MISSING"} - $label" })
+                appendLine()
+                appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
+                appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
+                appendLine("Auto segment rollover: ${prefs.maxActiveSegmentSeconds}s")
+                appendLine("Sync: ${prefs.lastSyncLabel}")
+                appendLine(AudioSignalStore.label())
+                appendLine(AudioSystemSignals.label(this@MainActivity))
+                appendLine("Maintenance: ${if (prefs.lastMaintenanceAtMs > 0) "${(System.currentTimeMillis() - prefs.lastMaintenanceAtMs) / 1000}s ago" else "waiting"}")
+                appendLine("Companion mode: ${CompanionDeviceSupport.associationCount(this@MainActivity)} associated device(s)")
+                appendLine()
+                appendLine("Optional controller plugin")
+                append(optionalChecks.joinToString("\n") { (label, ok) -> "${if (ok) "OK" else "SKIPPED"} - $label" })
+            }
+            if (::omiAuthStatus.isInitialized) omiAuthStatus.text = omiAuthLabel()
+        }.onFailure { recordUiRefreshFailure("preflight", it) }
     }
 
     private fun omiAuthLabel(): String {
@@ -493,9 +548,30 @@ class MainActivity : Activity() {
     }
 
     private fun refreshDiagnostics() {
-        if (::diagnostics.isInitialized) {
-            DiagnosticsStore(this).write("ui_refresh")
-            diagnostics.text = DiagnosticsStore(this).read()
+        runCatching {
+            if (::diagnostics.isInitialized) {
+                DiagnosticsStore(this).write("ui_refresh")
+                diagnostics.text = DiagnosticsStore(this).read()
+            }
+        }.onFailure { recordUiRefreshFailure("diagnostics", it) }
+    }
+
+    private fun refreshLiveUi(reason: String) {
+        runCatching {
+            if (::status.isInitialized) status.text = "Status: ${AmbientForegroundMicService.lastHealthState().name}"
+            refreshPreflight()
+            refreshStorage()
+            refreshAudit()
+            if (reason != "live") refreshDiagnostics()
+        }.onFailure { recordUiRefreshFailure("live:$reason", it) }
+    }
+
+    private fun recordUiRefreshFailure(area: String, error: Throwable) {
+        runCatching {
+            AuditLog(this).record(
+                "ui_refresh_failed",
+                mapOf("area" to area, "error" to error.javaClass.simpleName, "message" to (error.message ?: "").take(160)),
+            )
         }
     }
 
@@ -578,9 +654,15 @@ class MainActivity : Activity() {
 
     companion object {
         private const val MEDIA_PROJECTION_REQUEST = 7304
+        private const val LIVE_REFRESH_MS = 1_000L
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun formatBytes(bytes: Long): String {
+        if (bytes < 1024L * 1024L) return "${bytes / 1024L} KB"
+        return String.format("%.1f MB", bytes / (1024.0 * 1024.0))
+    }
 
     private fun setupChecklist(): String {
         val items = listOf(

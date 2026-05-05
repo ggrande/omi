@@ -156,6 +156,10 @@ class AppPrefs(context: Context) {
         get() = prefs.getString("last_sync_label", "Not synced yet") ?: "Not synced yet"
         set(value) = prefs.edit().putString("last_sync_label", value.take(180)).apply()
 
+    var lastOmiSyncTrace: String
+        get() = prefs.getString("last_omi_sync_trace", "No Omi job trace yet") ?: "No Omi job trace yet"
+        set(value) = prefs.edit().putString("last_omi_sync_trace", value.take(240)).apply()
+
     var lastMaintenanceAtMs: Long
         get() = prefs.getLong("last_maintenance_at_ms", 0)
         set(value) = prefs.edit().putLong("last_maintenance_at_ms", value).apply()

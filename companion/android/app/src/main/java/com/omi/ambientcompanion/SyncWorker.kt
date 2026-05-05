@@ -77,12 +77,19 @@ object SyncWorker {
         if (prefs.allowAudioUpload) {
             pendingSpool.forEach { meta ->
                 attempted = true
-                val uploadedToOmi = omiAuth.uploadAudioFile(meta, spool.readPlainChunks(meta))
+                val omiResult = omiAuth.uploadAudioFile(meta, spool.readPlainChunks(meta))
+                val uploadedToOmi = omiResult.success
                 val uploadedToController = if (uploadedToOmi) false else client.uploadAudioFile(meta, spool.readPlainChunks(meta))
                 if (uploadedToOmi || uploadedToController) {
                     uploaded.add(meta.filePath)
                     uploadedSessions.add(meta.sessionId)
                     succeeded = true
+                    if (uploadedToOmi) {
+                        prefs.lastSyncLabel = "Omi upload accepted; tracing job result"
+                        omiAuth.traceSyncResult(omiResult, "immediate")
+                        Thread.sleep(TRACE_AFTER_UPLOAD_DELAY_MS)
+                        omiAuth.traceSyncResult(omiResult, "delayed")
+                    }
                     audit.record(
                         "spool_audio_uploaded",
                         mapOf(
@@ -127,4 +134,6 @@ object SyncWorker {
         val caps = cm.getNetworkCapabilities(network) ?: return false
         return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
+
+    private const val TRACE_AFTER_UPLOAD_DELAY_MS = 20_000L
 }

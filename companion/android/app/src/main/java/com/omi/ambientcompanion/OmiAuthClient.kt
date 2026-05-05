@@ -97,14 +97,14 @@ class OmiAuthClient(private val context: Context) {
         return secureStore.getSecret(ID_TOKEN_KEY)
     }
 
-    fun uploadAudioFile(meta: SpoolMetadata, chunks: Sequence<ByteArray>): Boolean {
+    fun uploadAudioFile(meta: SpoolMetadata, chunks: Sequence<ByteArray>): OmiAudioSyncResult {
         val token = getFreshIdToken()
         if (token.isBlank()) {
             audit.record("omi_audio_sync_skipped", mapOf("reason" to "missing_omi_auth"))
-            return false
+            return OmiAudioSyncResult(false, "none", meta.sessionId, status = "missing_omi_auth")
         }
         val bytes = lengthPrefixedBytes(chunks)
-        if (bytes.isEmpty()) return false
+        if (bytes.isEmpty()) return OmiAudioSyncResult(false, "none", meta.sessionId, status = "empty_audio")
         val filename = AmbientSyncFilenames.omiPcm16Bin(meta)
         val headers = mapOf(
             "Authorization" to "Bearer $token",
@@ -116,20 +116,22 @@ class OmiAuthClient(private val context: Context) {
             return pollSyncJob(v2Url, v2.body, headers, meta)
         }
         if (v2.status in 200..299) {
-            audit.record("omi_audio_sync_uploaded", mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "status" to v2.status))
-            return true
+            val result = parseSyncResult(meta, "v2", v2.status, v2.body)
+            recordUploadResult(result)
+            return result
         }
         if (v2.status == 404 || v2.status == 405) {
             val v1 = requestMultipart("${BuildConfig.OMI_API_BASE_URL}v1/sync-local-files", filename, bytes, headers)
             if (v1.status in 200..299) {
-                audit.record("omi_audio_sync_uploaded", mapOf("endpoint" to "v1", "session_id" to meta.sessionId, "status" to v1.status))
-                return true
+                val result = parseSyncResult(meta, "v1", v1.status, v1.body)
+                recordUploadResult(result)
+                return result
             }
             audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v1", "status" to v1.status, "body" to v1.body.take(200)))
-            return false
+            return OmiAudioSyncResult(false, "v1", meta.sessionId, status = "http_${v1.status}", httpStatus = v1.status, body = v1.body.take(240))
         }
         audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "status" to v2.status, "body" to v2.body.take(200)))
-        return false
+        return OmiAudioSyncResult(false, "v2", meta.sessionId, status = "http_${v2.status}", httpStatus = v2.status, body = v2.body.take(240))
     }
 
     fun uploadFallbackSegments(segments: List<FallbackSegment>): Boolean {
@@ -183,12 +185,72 @@ class OmiAuthClient(private val context: Context) {
         return false
     }
 
-    private fun pollSyncJob(baseUrl: String, body: String, headers: Map<String, String>, meta: SpoolMetadata): Boolean {
+    fun traceSyncResult(result: OmiAudioSyncResult, phase: String = "immediate") {
+        if (!result.success) return
+        val token = getFreshIdToken()
+        if (token.isBlank()) {
+            audit.record("omi_sync_trace_skipped", mapOf("reason" to "missing_omi_auth", "session_id" to result.sessionId))
+            return
+        }
+        val headers = mapOf("Authorization" to "Bearer $token")
+        val ids = result.conversationIds()
+        if (ids.isNotEmpty()) {
+            ids.take(6).forEach { id ->
+                val response = request(
+                    method = "GET",
+                    url = "${BuildConfig.OMI_API_BASE_URL}v1/dev/user/conversations/${encPath(id)}?include_transcript=true",
+                    body = null,
+                    headers = headers,
+                )
+                val json = runCatching { JSONObject(response.body) }.getOrNull()
+                val segmentCount = json?.optJSONArray("transcript_segments")?.length() ?: -1
+                val title = json?.optJSONObject("structured")?.optString("title").orEmpty()
+                val source = json?.optString("source").orEmpty()
+                audit.record(
+                    "omi_conversation_trace",
+                    mapOf(
+                        "phase" to phase,
+                        "conversation_id" to id,
+                        "http_status" to response.status,
+                        "title" to title.take(80),
+                        "source" to source,
+                        "transcript_segments" to segmentCount,
+                    ),
+                )
+                prefs.lastOmiSyncTrace = "Trace $phase: ${ids.size} id(s), $id status ${response.status}, segments $segmentCount"
+            }
+            return
+        }
+
+        val recent = request(
+            method = "GET",
+            url = "${BuildConfig.OMI_API_BASE_URL}v1/conversations?include_discarded=true&limit=10&offset=0",
+            body = null,
+            headers = headers,
+        )
+        val memories = runCatching { JSONObject(recent.body).optJSONArray("memories") }.getOrNull()
+        val first = memories?.optJSONObject(0)
+        val firstId = first?.optString("id").orEmpty()
+        val firstDiscarded = first?.optBoolean("discarded", false) ?: false
+        audit.record(
+            "omi_recent_conversations_trace",
+            mapOf(
+                "phase" to phase,
+                "http_status" to recent.status,
+                "count" to (memories?.length() ?: -1),
+                "first_id" to firstId,
+                "first_discarded" to firstDiscarded,
+            ),
+        )
+        prefs.lastOmiSyncTrace = "Trace $phase: no ids returned; recent ${recent.status}, count ${memories?.length() ?: -1}"
+    }
+
+    private fun pollSyncJob(baseUrl: String, body: String, headers: Map<String, String>, meta: SpoolMetadata): OmiAudioSyncResult {
         val start = runCatching { JSONObject(body) }.getOrNull()
         val jobId = start?.optString("job_id").orEmpty()
         if (jobId.isBlank()) {
             audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "status" to 202, "body" to body.take(200)))
-            return false
+            return OmiAudioSyncResult(false, "v2", meta.sessionId, status = "missing_job_id", httpStatus = 202, body = body.take(240))
         }
         var pollAfterMs = start?.optLong("poll_after_ms", 3000L)?.coerceIn(1000L, 10_000L) ?: 3000L
         audit.record("omi_audio_sync_job_started", mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId))
@@ -205,30 +267,67 @@ class OmiAuthClient(private val context: Context) {
             val json = runCatching { JSONObject(poll.body) }.getOrNull() ?: return@repeat
             val status = json.optString("status")
             if (status == "completed" || status == "partial_failure") {
-                audit.record(
-                    "omi_audio_sync_uploaded",
-                    mapOf(
-                        "endpoint" to "v2",
-                        "session_id" to meta.sessionId,
-                        "job_id" to jobId,
-                        "status" to status,
-                        "successful_segments" to json.optInt("successful_segments", 0),
-                        "failed_segments" to json.optInt("failed_segments", 0),
-                    ),
-                )
-                return true
+                val result = parseSyncResult(meta, "v2", poll.status, poll.body, jobId)
+                recordUploadResult(result)
+                return result
             }
             if (status == "failed") {
                 audit.record(
                     "omi_audio_sync_failed",
                     mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId, "status" to status, "body" to poll.body.take(200)),
                 )
-                return false
+                return parseSyncResult(meta, "v2", poll.status, poll.body, jobId).copy(success = false)
             }
             pollAfterMs = 3000L
         }
         audit.record("omi_audio_sync_failed", mapOf("endpoint" to "v2", "session_id" to meta.sessionId, "job_id" to jobId, "reason" to "poll_timeout"))
-        return false
+        return OmiAudioSyncResult(false, "v2", meta.sessionId, jobId = jobId, status = "poll_timeout")
+    }
+
+    private fun parseSyncResult(
+        meta: SpoolMetadata,
+        endpoint: String,
+        httpStatus: Int,
+        body: String,
+        jobIdOverride: String = "",
+    ): OmiAudioSyncResult {
+        val json = runCatching { JSONObject(body) }.getOrNull()
+        val status = json?.optString("status").orEmpty().ifBlank { if (httpStatus in 200..299) "completed" else "http_$httpStatus" }
+        return OmiAudioSyncResult(
+            success = httpStatus in 200..299 && status != "failed",
+            endpoint = endpoint,
+            sessionId = meta.sessionId,
+            jobId = jobIdOverride.ifBlank { json?.optString("job_id").orEmpty() },
+            status = status,
+            newConversationIds = jsonArrayStrings(json?.optJSONArray("new_memories")),
+            updatedConversationIds = jsonArrayStrings(json?.optJSONArray("updated_memories")),
+            successfulSegments = json?.optInt("successful_segments", 0) ?: 0,
+            failedSegments = json?.optInt("failed_segments", 0) ?: 0,
+            httpStatus = httpStatus,
+            body = body.take(240),
+        )
+    }
+
+    private fun recordUploadResult(result: OmiAudioSyncResult) {
+        prefs.lastOmiSyncTrace = result.summary()
+        audit.record(
+            "omi_audio_sync_uploaded",
+            mapOf(
+                "endpoint" to result.endpoint,
+                "session_id" to result.sessionId,
+                "job_id" to result.jobId,
+                "status" to result.status,
+                "successful_segments" to result.successfulSegments,
+                "failed_segments" to result.failedSegments,
+                "new_memories" to result.newConversationIds.joinToString(","),
+                "updated_memories" to result.updatedConversationIds.joinToString(","),
+            ),
+        )
+    }
+
+    private fun jsonArrayStrings(array: JSONArray?): List<String> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).mapNotNull { index -> array.optString(index).takeIf { it.isNotBlank() } }
     }
 
     private fun exchangeCode(code: String): HttpResponse {
@@ -372,6 +471,8 @@ class OmiAuthClient(private val context: Context) {
 
     private fun enc(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name())
 
+    private fun encPath(value: String): String = URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
+
     companion object {
         private const val ID_TOKEN_KEY = "omi_firebase_id_token"
         private const val REFRESH_TOKEN_KEY = "omi_firebase_refresh_token"
@@ -380,5 +481,27 @@ class OmiAuthClient(private val context: Context) {
         private const val FIREBASE_SIGN_IN_IDP_URL = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithIdp"
         private const val FIREBASE_REFRESH_URL = "https://securetoken.googleapis.com/v1/token"
         private const val MAX_SYNC_JOB_POLLS = 80
+    }
+}
+
+data class OmiAudioSyncResult(
+    val success: Boolean,
+    val endpoint: String,
+    val sessionId: String,
+    val jobId: String = "",
+    val status: String = "",
+    val newConversationIds: List<String> = emptyList(),
+    val updatedConversationIds: List<String> = emptyList(),
+    val successfulSegments: Int = 0,
+    val failedSegments: Int = 0,
+    val httpStatus: Int = 0,
+    val body: String = "",
+) {
+    fun conversationIds(): List<String> = (newConversationIds + updatedConversationIds).distinct()
+
+    fun summary(): String {
+        val shortJob = jobId.take(8).ifBlank { "none" }
+        return "job=$shortJob status=${status.ifBlank { "unknown" }} new=${newConversationIds.size} " +
+            "updated=${updatedConversationIds.size} okSeg=$successfulSegments failSeg=$failedSegments"
     }
 }

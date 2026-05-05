@@ -442,6 +442,7 @@ class MainActivity : Activity() {
                 val fallback = FallbackSegmentQueue(this).stats()
                 storage.text = buildString {
                     appendLine("Sync: ${prefs.lastSyncLabel}")
+                    appendLine("Omi trace: ${prefs.lastOmiSyncTrace}")
                     appendLine(AudioSystemSignals.label(this@MainActivity))
                     appendLine(
                         "Audio spool: ${spool["pending_count"]} pending, ${spool["synced_count"]} synced, " +
@@ -526,6 +527,7 @@ class MainActivity : Activity() {
                 appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
                 appendLine("Auto segment rollover: ${prefs.maxActiveSegmentSeconds}s")
                 appendLine("Sync: ${prefs.lastSyncLabel}")
+                appendLine("Omi trace: ${prefs.lastOmiSyncTrace}")
                 appendLine(AudioSignalStore.label())
                 appendLine(AudioSystemSignals.label(this@MainActivity))
                 appendLine("Maintenance: ${if (prefs.lastMaintenanceAtMs > 0) "${(System.currentTimeMillis() - prefs.lastMaintenanceAtMs) / 1000}s ago" else "waiting"}")

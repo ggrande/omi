@@ -34,9 +34,20 @@ object ContextSignals {
     }
 
     fun enqueueCaption(context: Context, text: String, source: FallbackSource) {
-        if (!AppPrefs(context).allowCaptionFallback) return
+        val prefs = AppPrefs(context)
+        if (!prefs.allowCaptionFallback) return
         val normalized = text.trim().replace(Regex("\\s+"), " ")
         if (normalized.length < 3 || normalized == lastCaptionText) return
+        if (prefs.junkFilterEnabled) {
+            val decision = ConversationQualityFilter.evaluate(normalized, source)
+            if (!decision.allow) {
+                AuditLog(context).record(
+                    "fallback_segment_rejected_junk",
+                    mapOf("source" to source.name, "reason" to decision.reason, "text" to normalized.take(80)),
+                )
+                return
+            }
+        }
         lastCaptionText = normalized
         captionFallbackActive = true
         lastTriggerReason = source.name.lowercase()
@@ -86,6 +97,12 @@ object ContextSignals {
 
     private fun maybeStartMicFromContext(context: Context, reason: String, idleText: String) {
         val prefs = AppPrefs(context)
+        DevicePlacementMonitor.start(context)
+        if (!DevicePlacementMonitor.recordingAllowed(prefs)) {
+            AuditLog(context).record("context_trigger_waiting_for_placement", mapOf("reason" to reason))
+            ArmedStatusNotifier.show(context, "Context detected. ${DevicePlacementMonitor.label(prefs)}")
+            return
+        }
         if (prefs.continuousMicWatchEnabled && prefs.micWatchConsentAccepted) {
             AmbientForegroundMicService.start(context, reason)
         } else {

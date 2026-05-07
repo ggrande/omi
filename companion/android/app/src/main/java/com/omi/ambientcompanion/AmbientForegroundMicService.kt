@@ -38,6 +38,7 @@ class AmbientForegroundMicService : Service() {
     private var lastHealth = HealthEvent(AmbientHealthState.IDLE_CONTEXT_WATCH, "created")
     private var speechSessionActive = false
     private var lastAudioAt = 0L
+    private var lastPlacementGateLogMs = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private var policyLoop: Runnable? = null
 
@@ -50,6 +51,7 @@ class AmbientForegroundMicService : Service() {
         audit = AuditLog(this)
         pluginClient = PluginClient(this)
         communicationMonitor = CommunicationStateMonitor(this) { health -> updateHealth(health) }
+        DevicePlacementMonitor.start(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -104,6 +106,11 @@ class AmbientForegroundMicService : Service() {
         while (capturing.get()) {
             if (paused.get() || privateMode.get()) {
                 Thread.sleep(250)
+                continue
+            }
+            if (!DevicePlacementMonitor.recordingAllowed(prefs)) {
+                handlePlacementGateBlocked()
+                sleepResponsive(1_000L)
                 continue
             }
 
@@ -164,6 +171,10 @@ class AmbientForegroundMicService : Service() {
     }
 
     private fun handleAudioChunk(chunk: ByteArray) {
+        if (!DevicePlacementMonitor.recordingAllowed(prefs)) {
+            handlePlacementGateBlocked()
+            return
+        }
         val result = vad.accept(chunk)
         val signalEvents = AudioSignalStore.update(result, vad.activeSpeech, speechSessionActive)
         signalEvents.forEach { event ->
@@ -216,6 +227,24 @@ class AmbientForegroundMicService : Service() {
         SyncWorker.drainAsync(applicationContext, force = true)
         spoolStore.startSession()
         updateNotification("Recording; previous segment syncing")
+    }
+
+    private fun handlePlacementGateBlocked() {
+        if (speechSessionActive || spoolStore.hasOpenSession()) {
+            spoolStore.closeSession("placement_gate")
+            speechSessionActive = false
+            releaseWakeLock()
+            LocalSttWorker(applicationContext).drainSpoolForLocalTranscripts()
+            SyncWorker.drainAsync(applicationContext, force = true)
+        }
+        val now = System.currentTimeMillis()
+        if (now - lastPlacementGateLogMs > 30_000L) {
+            audit.record("capture_waiting_for_placement", mapOf("placement" to DevicePlacementMonitor.label(prefs)))
+            lastPlacementGateLogMs = now
+        }
+        prefs.lastSyncLabel = "Waiting for placement gate"
+        updateHealth(HealthEvent(AmbientHealthState.IDLE_CONTEXT_WATCH, "placement_gate", ContextSignals.foregroundPackage))
+        updateNotification(DevicePlacementMonitor.label(prefs).take(80))
     }
 
     private fun flushCurrentSegmentAndSync(reason: String) {
@@ -319,6 +348,7 @@ class AmbientForegroundMicService : Service() {
         SyncWorker.drainAsync(applicationContext)
         stopForeground(STOP_FOREGROUND_REMOVE)
         ArmedStatusNotifier.show(this)
+        DevicePlacementMonitor.stop()
         if (stopSelf) stopSelf()
     }
 
@@ -455,6 +485,12 @@ class AmbientForegroundMicService : Service() {
             if (!prefs.micWatchConsentAccepted) {
                 ArmedStatusNotifier.show(context, "Open app to accept microphone watch consent.")
                 AuditLog(context).record("mic_start_blocked_missing_consent", mapOf("reason" to reason))
+                return
+            }
+            DevicePlacementMonitor.start(context)
+            if (!DevicePlacementMonitor.recordingAllowed(prefs)) {
+                ArmedStatusNotifier.show(context, "Waiting for placement. ${DevicePlacementMonitor.label(prefs)}")
+                AuditLog(context).record("mic_start_blocked_placement", mapOf("reason" to reason, "placement" to DevicePlacementMonitor.label(prefs)))
                 return
             }
             if (!userInitiated && !prefs.continuousMicWatchEnabled) {

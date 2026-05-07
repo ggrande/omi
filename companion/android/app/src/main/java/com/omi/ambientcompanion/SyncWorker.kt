@@ -45,7 +45,7 @@ object SyncWorker {
         var attempted = false
         var succeeded = false
         var terminalLabel: String? = null
-        val pendingSegments = fallbackQueue.pending()
+        val pendingSegments = filterPendingFallbackSegments(fallbackQueue, prefs, audit)
         val pluginReady = prefs.fallbackSegmentsUrl.isNotBlank() && SecureStore(context).getSecret("device_token").isNotBlank()
         if (pendingSegments.isNotEmpty() && pluginReady) {
             attempted = true
@@ -150,6 +150,21 @@ object SyncWorker {
     }
 
     private const val TRACE_AFTER_UPLOAD_DELAY_MS = 20_000L
+
+    private fun filterPendingFallbackSegments(
+        queue: FallbackSegmentQueue,
+        prefs: AppPrefs,
+        audit: AuditLog,
+    ): List<FallbackSegment> {
+        val pending = queue.pending()
+        if (!prefs.junkFilterEnabled) return pending
+        val rejected = pending.filter { !ConversationQualityFilter.evaluate(it.text, it.source).allow }
+        if (rejected.isNotEmpty()) {
+            queue.clearUploaded(rejected.map { it.id }.toSet())
+            audit.record("fallback_segments_junk_removed", mapOf("count" to rejected.size))
+        }
+        return pending - rejected.toSet()
+    }
 
     private fun FallbackSegment.shouldUploadDirectlyToOmi(): Boolean {
         return text.isNotBlank() && (!rawAudioAvailable || source == FallbackSource.LOCAL_STT)

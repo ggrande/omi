@@ -61,6 +61,7 @@ class MainActivity : Activity() {
         runCatching {
             prefs = AppPrefs(this)
             AmbientMaintenanceScheduler.schedule(this, "ui")
+            DevicePlacementMonitor.start(this)
             setContentView(buildUi())
             handleOauthCallback(intent)
             handleSetupLink(intent)
@@ -337,6 +338,8 @@ class MainActivity : Activity() {
             addView(text("Idle notification: ${if (prefs.armedStatusNotificationEnabled) "on" else "off"}", 12))
             addView(text("Sampled VAD: ${if (prefs.sampledVadEnabled) "on (${prefs.sampledVadWindowMs}ms every ${prefs.sampledVadIntervalMs / 1000}s)" else "off"}", 12))
             addView(text("Continuous mic watch: ${if (prefs.continuousMicWatchEnabled) "on" else "off"}", 12))
+            addView(text("Junk filter: ${if (prefs.junkFilterEnabled) "on" else "off"}", 12))
+            addView(text(DevicePlacementMonitor.label(prefs), 12))
             addView(text("Auto segment rollover: every ${prefs.maxActiveSegmentSeconds}s while speech/noise stays active", 12))
             addView(text("Companion associations: ${CompanionDeviceSupport.associationCount(this@MainActivity)}", 12))
             addView(row(
@@ -362,6 +365,42 @@ class MainActivity : Activity() {
                 button("Toggle sampled VAD") {
                     prefs.sampledVadEnabled = !prefs.sampledVadEnabled
                     AuditLog(this@MainActivity).record("sampled_vad_changed", mapOf("enabled" to prefs.sampledVadEnabled))
+                },
+                button("Toggle junk filter") {
+                    prefs.junkFilterEnabled = !prefs.junkFilterEnabled
+                    AuditLog(this@MainActivity).record("junk_filter_changed", mapOf("enabled" to prefs.junkFilterEnabled))
+                },
+            ))
+            addView(row(
+                button("Desk gate") {
+                    prefs.deskOnlyRecordingEnabled = !prefs.deskOnlyRecordingEnabled
+                    if (!prefs.deskOnlyRecordingEnabled) prefs.faceDownDeskOnlyEnabled = false
+                    DevicePlacementMonitor.start(this@MainActivity)
+                    AuditLog(this@MainActivity).record(
+                        "placement_gate_changed",
+                        mapOf("desk_only" to prefs.deskOnlyRecordingEnabled, "face_down" to prefs.faceDownDeskOnlyEnabled),
+                    )
+                },
+                button("Face-down gate") {
+                    prefs.deskOnlyRecordingEnabled = true
+                    prefs.faceDownDeskOnlyEnabled = !prefs.faceDownDeskOnlyEnabled
+                    DevicePlacementMonitor.start(this@MainActivity)
+                    AuditLog(this@MainActivity).record(
+                        "placement_gate_changed",
+                        mapOf("desk_only" to prefs.deskOnlyRecordingEnabled, "face_down" to prefs.faceDownDeskOnlyEnabled),
+                    )
+                },
+            ))
+            addView(row(
+                button("Check voice profile") {
+                    thread {
+                        val result = OmiAuthClient(this@MainActivity).refreshSpeechProfileStatus()
+                        runOnUiThread {
+                            status.text = "Omi trained voice profile: ${result?.let { if (it) "found" else "not found" } ?: "unknown"}"
+                            refreshPreflight()
+                            refreshAudit()
+                        }
+                    }
                 },
                 button("Max reliability") {
                     prefs.continuousMicWatchEnabled = true
@@ -526,6 +565,9 @@ class MainActivity : Activity() {
                 appendLine("Mic mode: ${if (prefs.continuousMicWatchEnabled) "continuous watch can auto-start from context" else "manual only; context triggers stay armed/idle"}")
                 appendLine("Sampled VAD: ${if (prefs.sampledVadEnabled) "${prefs.sampledVadWindowMs}ms checks every ${prefs.sampledVadIntervalMs / 1000}s" else "off"}")
                 appendLine("Auto segment rollover: ${prefs.maxActiveSegmentSeconds}s")
+                appendLine("Junk filter: ${if (prefs.junkFilterEnabled) "on" else "off"}")
+                appendLine(DevicePlacementMonitor.label(prefs))
+                appendLine("Omi trained voice profile: ${speechProfileLabel()}")
                 appendLine("Sync: ${prefs.lastSyncLabel}")
                 appendLine("Omi trace: ${prefs.lastOmiSyncTrace}")
                 appendLine(AudioSignalStore.label())
@@ -557,6 +599,13 @@ class MainActivity : Activity() {
                 diagnostics.text = DiagnosticsStore(this).read()
             }
         }.onFailure { recordUiRefreshFailure("diagnostics", it) }
+    }
+
+    private fun speechProfileLabel(): String {
+        if (!prefs.preferOmiUserVoice) return "not prioritized"
+        if (prefs.omiSpeechProfileCheckedAtMs <= 0) return "unknown; tap Advanced > Check voice profile"
+        val ageMinutes = ((System.currentTimeMillis() - prefs.omiSpeechProfileCheckedAtMs) / 60_000L).coerceAtLeast(0)
+        return "${if (prefs.omiHasSpeechProfile) "available" else "missing"} (${ageMinutes}m ago)"
     }
 
     private fun refreshLiveUi(reason: String) {

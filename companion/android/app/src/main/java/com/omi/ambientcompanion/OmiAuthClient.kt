@@ -140,10 +140,19 @@ class OmiAuthClient(private val context: Context) {
             audit.record("omi_fallback_sync_skipped", mapOf("reason" to "missing_omi_auth", "count" to segments.size))
             return false
         }
-        val usable = segments
+        val candidates = segments
             .filter { it.text.isNotBlank() && (!it.rawAudioAvailable || it.source == FallbackSource.LOCAL_STT) }
             .sortedBy { it.start }
             .take(500)
+        val usable = if (prefs.junkFilterEnabled) {
+            candidates.filter { ConversationQualityFilter.evaluate(it.text, it.source).allow }
+        } else {
+            candidates
+        }
+        val rejected = candidates.size - usable.size
+        if (rejected > 0) {
+            audit.record("omi_fallback_segments_junk_filtered", mapOf("rejected" to rejected, "candidates" to candidates.size))
+        }
         if (usable.isEmpty()) return false
 
         val startedAt = usable.first().start
@@ -189,6 +198,29 @@ class OmiAuthClient(private val context: Context) {
         }
         audit.record("omi_fallback_segments_failed", mapOf("status" to response.status, "body" to response.body.take(240), "count" to usable.size))
         return false
+    }
+
+    fun refreshSpeechProfileStatus(): Boolean? {
+        val token = getFreshIdToken()
+        if (token.isBlank()) {
+            audit.record("omi_speech_profile_check_skipped", mapOf("reason" to "missing_omi_auth"))
+            return null
+        }
+        val response = request(
+            method = "GET",
+            url = "${BuildConfig.OMI_API_BASE_URL}v3/speech-profile",
+            body = null,
+            headers = mapOf("Authorization" to "Bearer $token"),
+        )
+        if (response.status !in 200..299) {
+            audit.record("omi_speech_profile_check_failed", mapOf("status" to response.status, "body" to response.body.take(180)))
+            return null
+        }
+        val hasProfile = runCatching { JSONObject(response.body).optBoolean("has_profile", false) }.getOrDefault(false)
+        prefs.omiHasSpeechProfile = hasProfile
+        prefs.omiSpeechProfileCheckedAtMs = System.currentTimeMillis()
+        audit.record("omi_speech_profile_checked", mapOf("has_profile" to hasProfile))
+        return hasProfile
     }
 
     fun traceSyncResult(result: OmiAudioSyncResult, phase: String = "immediate") {

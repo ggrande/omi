@@ -152,6 +152,30 @@ class AppPrefs(context: Context) {
         get() = prefs.getInt("max_active_segment_seconds", 60)
         set(value) = prefs.edit().putInt("max_active_segment_seconds", value.coerceIn(15, 600)).apply()
 
+    var junkFilterEnabled: Boolean
+        get() = prefs.getBoolean("junk_filter_enabled", true)
+        set(value) = prefs.edit().putBoolean("junk_filter_enabled", value).apply()
+
+    var preferOmiUserVoice: Boolean
+        get() = prefs.getBoolean("prefer_omi_user_voice", true)
+        set(value) = prefs.edit().putBoolean("prefer_omi_user_voice", value).apply()
+
+    var deskOnlyRecordingEnabled: Boolean
+        get() = prefs.getBoolean("desk_only_recording_enabled", false)
+        set(value) = prefs.edit().putBoolean("desk_only_recording_enabled", value).apply()
+
+    var faceDownDeskOnlyEnabled: Boolean
+        get() = prefs.getBoolean("face_down_desk_only_enabled", false)
+        set(value) = prefs.edit().putBoolean("face_down_desk_only_enabled", value).apply()
+
+    var omiHasSpeechProfile: Boolean
+        get() = prefs.getBoolean("omi_has_speech_profile", false)
+        set(value) = prefs.edit().putBoolean("omi_has_speech_profile", value).apply()
+
+    var omiSpeechProfileCheckedAtMs: Long
+        get() = prefs.getLong("omi_speech_profile_checked_at_ms", 0)
+        set(value) = prefs.edit().putLong("omi_speech_profile_checked_at_ms", value).apply()
+
     var lastSyncLabel: String
         get() = prefs.getString("last_sync_label", "Not synced yet") ?: "Not synced yet"
         set(value) = prefs.edit().putString("last_sync_label", value.take(180)).apply()

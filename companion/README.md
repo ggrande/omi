@@ -23,6 +23,9 @@ This is not an Omi plugin and does not modify the official Omi app. The Ambient 
 - Runs best-effort Android on-device speech recognition over finalized spools on Android 13+ when supported by the device.
 - Supports explicit, user-approved MediaProjection audio capture for apps/audio usages Android allows.
 - Uses context triggers such as meeting/call notifications, Live Transcribe/Sound Notifications, wired headset, Bluetooth audio, and SCO route changes. By default these keep the app armed and idle; automatic mic start from those triggers requires explicit continuous mic watch consent.
+- Filters obvious fallback-text junk locally before creating Omi fallback conversations, including self-notifications, short UI fragments, and likely TV/movie/music captions.
+- Can check whether the signed-in Omi account has a trained speech profile so raw Omi uploads can benefit from Omi's server-side speaker attribution when available.
+- Optional placement gates can keep capture armed but blocked unless the phone appears stationary/off-body on a desk, with a stricter face-down-on-desk mode.
 - Shows a structured diagnostics snapshot in the app UI for field testing.
 
 ## Build
@@ -60,6 +63,7 @@ It installs next to the official/published Omi app and does not replace or modif
 9. Accept microphone watch consent if you want to start mic capture.
 10. Tap `Start`.
 11. Speak for 30-60 seconds, tap `Stop`, then tap `Sync`.
+12. For junk reduction, open `Advanced settings` and leave `Junk filter` on. Optionally enable `Desk gate` or `Face-down gate` if you only want capture while the phone appears to be resting on a desk.
 
 Optional plugin setup:
 
@@ -83,10 +87,12 @@ The app does not auto-record after reboot. Boot handling only resets stale recov
 - The app does not use `VoiceInteractionService`, SoundTrigger HAL, hidden recording, arbitrary screen scraping, or silent media sessions.
 - Companion Device Manager support requires a real user-approved device association; the app does not fake companion status.
 - Call/meeting capture is degraded when Android blocks audio. Captions/transcripts are labeled as fallback sources.
+- Desk/face-down gates are local safety gates. They use Android sensors and are best-effort; they do not prove consent or context.
 
 ## Known Limits
 
 - Local STT uses Android's on-device recognizer when available. It is not a bundled Whisper/Vosk model and may be unavailable or limited by the system recognizer.
 - MediaProjection captures only audio Android and the source app permit. It does not bypass protected meeting/call audio.
 - Direct audio upload targets Omi `/v2/sync-local-files` using the user's Omi auth token. The uploaded filename intentionally matches the official Omi WAL shape: `audio_phone_pcm16_16000_1_fs160_<timestamp>.bin`.
+- Omi's trained-speaker identification and fair-use/media discard logic run on Omi's server pipeline after raw audio upload/transcription. The companion can check speech-profile availability and can reduce obvious local fallback junk, but it does not have a public pre-upload endpoint for matching the trained voice locally.
 - Fallback caption/local-STT text is preserved locally. When uploaded directly to Omi it is explicitly prefixed with fallback source/health labels. When the optional plugin is configured, the plugin receives structured source labels and degraded metadata.

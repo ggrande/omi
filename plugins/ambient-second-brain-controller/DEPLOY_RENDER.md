@@ -1,6 +1,6 @@
 # Free HTTPS Deployment On Render
 
-Render Free is the fastest low-setup way to test the Ambient Second Brain Controller with a real HTTPS URL. It gives you a valid TLS endpoint such as `https://ambient-second-brain-controller.onrender.com`, which the companion app can call directly.
+Render Free is the fastest low-setup way to test the Ambient Second Brain Controller with a real HTTPS URL. It gives you a valid TLS endpoint such as `https://<your-service-name>.onrender.com`, which the companion app can call directly.
 
 Important limitation: Render Free services can sleep when idle and the local SQLite file is not a durable production database. This is fine for personal testing and handshake debugging. For a public release, move storage to durable Postgres/Supabase/Cloudflare D1 and object storage.
 

@@ -33,7 +33,18 @@ package: name='com.omi.ambientcompanion'
 application-label:'Omi Ambient Companion'
 ```
 
-## Controller Setup
+## Omi Sign-In Setup
+
+The current recommended test path is direct Omi sync:
+
+1. Open `Omi Ambient Companion`.
+2. Tap `Sign in with Omi`.
+3. Complete Google/Apple auth.
+4. Confirm `Preflight` shows `OK - Omi user id` and `OK - Omi auth token`.
+
+The optional controller plugin is no longer required for raw audio import into Omi. Keep it only if you want remote policy/configuration, plugin distribution, fallback segment storage, telemetry, or accountability workflows.
+
+## Optional Controller Setup
 
 The companion expects the `Ambient Second Brain Controller` plugin backend to be reachable from the phone.
 
@@ -50,29 +61,21 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 Expose it to the phone with your preferred tunnel. Set `WEBHOOK_BASE_URL` in the controller environment to the same public base URL.
 
-For Omi import, also set:
-
-```text
-OMI_API_BASE_URL=<your Omi API base URL>
-OMI_API_KEY=<developer/Omi token if available>
-```
-
-Without those, the controller still stores audio/fallback segments locally, but it cannot forward audio into Omi conversations.
+Without the optional controller, the companion still uses direct Omi auth for audio sync.
 
 ## First Install
 
 1. Install `app-debug.apk`.
 2. Open `Omi Ambient Companion`.
-3. Enter the public controller base URL.
-4. Enter your Omi user id.
-5. Tap `Register`.
-6. Tap `Permissions` and grant microphone, notifications, and Bluetooth route permission if prompted.
-7. Tap `Accessibility` and enable `Omi Ambient Companion`.
-8. Tap `Notifications` and enable notification listener access for `Omi Ambient Companion`.
-9. Tap `Battery` and allow unrestricted or exempt background operation.
-10. Return to the app and tap `Refresh Preflight`.
+3. Tap `Sign in with Omi` and complete auth.
+4. Tap `Permissions & setup` and grant microphone, notifications, and Bluetooth route permission if prompted.
+5. Enable `Omi Ambient Companion` in Accessibility settings.
+6. Enable notification listener access for `Omi Ambient Companion`.
+7. Allow unrestricted or exempt background operation.
+8. Return to the app and check `Preflight`.
+9. Optional: open `Advanced settings`, tap `Check voice profile`, and enable `Desk gate` or `Face-down gate` if you want placement-gated capture.
 
-The `Preflight` section should show `OK` for plugin URL, user id, device token, pinned key, microphone, notifications, accessibility, notification listener, and battery.
+The `Preflight` section should show `OK` for Omi user id, Omi auth token, microphone, notifications, accessibility, notification listener, and battery. Plugin rows are optional and may show `SKIPPED`.
 
 ## Smoke Tests
 
@@ -93,6 +96,14 @@ The `Preflight` section should show `OK` for plugin URL, user id, device token, 
 4. Re-enable network.
 5. Tap `Sync`.
 6. Confirm audit log shows `spool_audio_uploaded` or sync backoff if the controller is unreachable.
+
+### Junk Filter And Placement Gates
+
+1. Open `Advanced settings`.
+2. Confirm `Junk filter` is on.
+3. Optional: tap `Desk gate`, place the phone flat/stationary, and confirm `Placement gate` becomes allowed.
+4. Optional: tap `Face-down gate`, place the phone face down on a desk, and confirm capture is allowed only in that placement.
+5. Send a short self-notification or system notification and confirm the log shows `fallback_segment_rejected_junk` rather than a new fallback conversation.
 
 ### Accessibility Caption Fallback
 
